@@ -1,8 +1,8 @@
 <?php
 
-// Firebase configuration
-$firebaseBaseUrl = 'https://eventgodds-41e4f-default-rtdb.firebaseio.com/';
-$firebaseAuthToken = ''; // Add if you have authentication enabled
+// Firebase configuration - These should be set as Environment Variables
+$firebaseBaseUrl = getenv('FIREBASE_BASE_URL') ?: 'https://eventgodds-41e4f-default-rtdb.firebaseio.com/';
+$firebaseAuthToken = getenv('FIREBASE_AUTH_TOKEN') ?: '';
 
 function firebaseRequest($method, $path, $data = null) {
     global $firebaseBaseUrl, $firebaseAuthToken;
@@ -55,47 +55,52 @@ function firebaseRequest($method, $path, $data = null) {
     curl_close($ch);
     
     if ($httpCode >= 200 && $httpCode < 300) {
-        $decoded = json_decode($response, true);
-        return $decoded;
+        return json_decode($response, true);
     }
     
     error_log('Firebase error: HTTP ' . $httpCode . ' - ' . $response);
     return null;
 }
 
-// Initialize sample contestants
+// Initialize contestants (FS1 to FS5)
 function initializeContestants() {
     $existing = firebaseRequest("GET", "contestants");
     
-    if (!$existing) {
-        $sampleContestants = [
-            "CONT001" => [
+    if (!$existing || empty($existing)) {
+        $contestants = [
+            "FS1" => [
                 "contestant_name" => "John Mensah",
                 "votes" => 0,
-                "code" => "CONT001",
-                "description" => "Talented vocalist"
+                "code" => "FS1",
+                "description" => "Vocalist Extraordinaire"
             ],
-            "CONT002" => [
+            "FS2" => [
                 "contestant_name" => "Mary Asante",
                 "votes" => 0,
-                "code" => "CONT002",
-                "description" => "Amazing dancer"
+                "code" => "FS2",
+                "description" => "Dance Sensation"
             ],
-            "CONT003" => [
+            "FS3" => [
                 "contestant_name" => "David Boateng",
                 "votes" => 0,
-                "code" => "CONT003",
-                "description" => "Skilled instrumentalist"
+                "code" => "FS3",
+                "description" => "Master Instrumentalist"
             ],
-            "CONT004" => [
+            "FS4" => [
                 "contestant_name" => "Sarah Owusu",
                 "votes" => 0,
-                "code" => "CONT004",
-                "description" => "Creative poet"
+                "code" => "FS4",
+                "description" => "Poetry & Spoken Word"
+            ],
+            "FS5" => [
+                "contestant_name" => "Michael Kofi",
+                "votes" => 0,
+                "code" => "FS5",
+                "description" => "Comedy King"
             ]
         ];
         
-        foreach ($sampleContestants as $code => $contestant) {
+        foreach ($contestants as $code => $contestant) {
             firebaseRequest("PUT", "contestants/" . $code, $contestant);
         }
         
@@ -105,7 +110,7 @@ function initializeContestants() {
     return false;
 }
 
-// Initialize on first run
+// Call initialization
 initializeContestants();
 
 ?>
