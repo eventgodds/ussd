@@ -17,7 +17,6 @@ if (!$data) {
     $data = $_POST;
 }
 
-
 $sessionID = $data['sessionID'] ?? $data['sessionId'] ?? '';
 $userID = $data['userID'] ?? $data['userId'] ?? '';
 $msisdn = $data['msisdn'] ?? $data['phoneNumber'] ?? '';
