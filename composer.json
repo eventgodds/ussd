@@ -1,0 +1,19 @@
+{
+    "name": "ghartey/ussd-event",
+    "description": "USSD Application for Ghartey Event Voting System",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.0"
+    },
+    "config": {
+        "platform-check": false,
+        "optimize-autoloader": true
+    },
+    "scripts": {
+        "start": "php -S 0.0.0.0:8080 index.php",
+        "post-install-cmd": [
+            "@php -r 'echo \"PHP version: \" . PHP_VERSION . \"\\n\";'"
+        ]
+    }
+}
