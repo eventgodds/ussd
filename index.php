@@ -62,25 +62,15 @@ if ($newSession == true || empty($userData)) {
 elseif ($userSession['step'] == 'menu') {
     
     if ($userData == "1") {
-        // Show contestants list
-        $contestants = getContestants();
-        if ($contestants) {
-            $message = "Select contestant:\n";
-            foreach ($contestants as $code => $contestant) {
-                $message .= $code . " - " . $contestant['contestant_name'] . "\n";
-            }
-            $message .= "Enter contestant code:";
-            saveSession($msisdn, ['step' => 'enter_code']);
-        } else {
-            $message = "No contestants available. Contact admin.";
-            $continueSession = false;
-        }
+        // Directly ask for contestant code without showing list
+        $message = "Enter contestant code (FS1, FS2, FS3, FS4, or FS5):";
+        saveSession($msisdn, ['step' => 'enter_code']);
     }
     
     elseif ($userData == "2") {
-        // Show results
+        // Show results from database
         $contestants = getContestants();
-        if ($contestants) {
+        if ($contestants && !empty($contestants)) {
             $message = "Current Results:\n";
             foreach ($contestants as $code => $contestant) {
                 $votes = isset($contestant['votes']) ? $contestant['votes'] : 0;
@@ -90,14 +80,14 @@ elseif ($userSession['step'] == 'menu') {
             $continueSession = true;
             saveSession($msisdn, ['step' => 'menu']);
         } else {
-            $message = "No results available.";
-            $continueSession = false;
+            $message = "No results available. Send 0 for main menu";
+            $continueSession = true;
         }
     }
     
     elseif ($userData == "3") {
         $message = "Help:\n";
-        $message .= "1. Vote - Choose your favorite contestant\n";
+        $message .= "1. Vote - Enter contestant code (FS1-FS5)\n";
         $message .= "2. View Results - See current standings\n";
         $message .= "Send 0 for main menu";
         $continueSession = true;
@@ -123,7 +113,7 @@ elseif ($userSession['step'] == 'menu') {
 
 /*
 |--------------------------------------------------------------------------
-| ENTER CONTESTANT CODE
+| ENTER CONTESTANT CODE - RETRIEVE FROM DATABASE
 |--------------------------------------------------------------------------
 */
 
@@ -131,22 +121,29 @@ elseif ($userSession['step'] == 'enter_code') {
     
     $contestantCode = strtoupper($userData);
     
-    // Check if contestant exists in Firestore
+    // Check if contestant exists in Firestore database
     $contestant = getContestant($contestantCode);
     
     if ($contestant && isset($contestant['contestant_name'])) {
+        // Contestant found in database - show their data
+        $currentVotes = isset($contestant['votes']) ? $contestant['votes'] : 0;
+        
+        $message = "Contestant found in database:\n";
+        $message .= "Name: " . $contestant['contestant_name'] . "\n";
+        $message .= "Code: " . $contestantCode . "\n";
+        $message .= "Current votes: " . $currentVotes . "\n";
+        $message .= "Enter number of votes to add (1-100):";
+        
         // Save selected contestant to session
         saveSession($msisdn, [
             'step' => 'enter_votes',
             'selected_code' => $contestantCode,
-            'selected_name' => $contestant['contestant_name']
+            'selected_name' => $contestant['contestant_name'],
+            'current_votes' => $currentVotes
         ]);
-        
-        $message = "Contestant: " . $contestant['contestant_name'] . "\n";
-        $message .= "Current votes: " . ($contestant['votes'] ?? 0) . "\n";
-        $message .= "Enter number of votes (1-100):";
     } else {
-        $message = "Contestant code '" . $contestantCode . "' not found.\n";
+        // Contestant not found in database
+        $message = "Contestant code '" . $contestantCode . "' not found in database.\n";
         $message .= "Valid codes: FS1, FS2, FS3, FS4, FS5\n";
         $message .= "Enter contestant code or 0 for menu:";
         saveSession($msisdn, ['step' => 'enter_code']);
@@ -155,7 +152,7 @@ elseif ($userSession['step'] == 'enter_code') {
 
 /*
 |--------------------------------------------------------------------------
-| ENTER NUMBER OF VOTES
+| ENTER NUMBER OF VOTES - UPDATE DATABASE
 |--------------------------------------------------------------------------
 */
 
@@ -166,6 +163,8 @@ elseif ($userSession['step'] == 'enter_votes') {
     if ($numberOfVotes > 0 && $numberOfVotes <= 100) {
         
         $contestantCode = $userSession['selected_code'];
+        
+        // Get current contestant data from database
         $contestant = getContestant($contestantCode);
         
         if ($contestant) {
@@ -173,22 +172,25 @@ elseif ($userSession['step'] == 'enter_votes') {
             $currentVotes = isset($contestant['votes']) ? intval($contestant['votes']) : 0;
             $newTotalVotes = $currentVotes + $numberOfVotes;
             
-            // Update contestant votes in Firestore
+            // Update contestant votes in Firestore database
             $updateResult = updateContestantVotes($contestantCode, $newTotalVotes);
             
-            // Record transaction
+            // Record transaction in database
             $transaction = [
                 "msisdn" => $msisdn,
                 "contestant_code" => $contestantCode,
                 "contestant_name" => $contestant['contestant_name'],
-                "votes" => $numberOfVotes,
+                "votes_added" => $numberOfVotes,
+                "previous_total" => $currentVotes,
+                "new_total" => $newTotalVotes,
                 "timestamp" => time(),
                 "date" => date('Y-m-d H:i:s')
             ];
             saveTransaction($transaction);
             
-            $message = "SUCCESS!\n";
-            $message .= $numberOfVotes . " vote(s) added to " . $contestant['contestant_name'] . "\n";
+            $message = "VOTE SUCCESSFUL!\n";
+            $message .= "Added " . $numberOfVotes . " vote(s) to " . $contestant['contestant_name'] . "\n";
+            $message .= "Previous votes: " . $currentVotes . "\n";
             $message .= "Total votes now: " . $newTotalVotes . "\n";
             $message .= "Thank you for voting!";
             $continueSession = false;
@@ -196,7 +198,7 @@ elseif ($userSession['step'] == 'enter_votes') {
             // Clear session
             deleteSession($msisdn);
         } else {
-            $message = "Error: Contestant not found.\n";
+            $message = "Error: Contestant not found in database.\n";
             $message .= "Please try again.";
             $continueSession = false;
         }
