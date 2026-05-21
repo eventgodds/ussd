@@ -17,11 +17,11 @@ if (!$data) {
     $data = $_POST;
 }
 
-$sessionID = $data['sessionID'] ?? $data['sessionId'] ?? $data['SESSION_ID'] ?? '';
-$userID = $data['userID'] ?? $data['userId'] ?? $data['USER_ID'] ?? '';
-$msisdn = $data['msisdn'] ?? $data['phoneNumber'] ?? $data['MSISDN'] ?? '';
+$sessionID = $data['sessionID'] ?? $data['sessionId'] ?? '';
+$userID = $data['userID'] ?? $data['userId'] ?? '';
+$msisdn = $data['msisdn'] ?? $data['phoneNumber'] ?? '';
 $newSession = $data['newSession'] ?? $data['new_session'] ?? false;
-$userData = trim($data['userData'] ?? $data['text'] ?? $data['USER_DATA'] ?? '');
+$userData = trim($data['userData'] ?? $data['text'] ?? '');
 
 if (is_string($newSession)) {
     $newSession = strtolower($newSession) === 'true';
@@ -31,10 +31,11 @@ $message = "";
 $continueSession = true;
 $input = explode('*', $userData);
 
-// Get or create user session
-$userSession = firebaseRequest("GET", "sessions/" . $msisdn);
-if (!$userSession) {
+// Get or create user session from Firestore
+$userSession = getSession($msisdn);
+if (!$userSession || empty($userSession)) {
     $userSession = ['step' => 'menu'];
+    saveSession($msisdn, $userSession);
 }
 
 /*
@@ -49,7 +50,7 @@ if ($newSession == true || empty($userData)) {
     $message .= "2. View Results\n";
     $message .= "3. Help\n";
     $message .= "Enter choice:";
-    firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'menu']);
+    saveSession($msisdn, ['step' => 'menu']);
 }
 
 /*
@@ -62,14 +63,14 @@ elseif ($userSession['step'] == 'menu') {
     
     if ($userData == "1") {
         // Show contestants list
-        $contestants = firebaseRequest("GET", "contestants");
+        $contestants = getContestants();
         if ($contestants) {
             $message = "Select contestant:\n";
             foreach ($contestants as $code => $contestant) {
                 $message .= $code . " - " . $contestant['contestant_name'] . "\n";
             }
             $message .= "Enter contestant code:";
-            firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'enter_code']);
+            saveSession($msisdn, ['step' => 'enter_code']);
         } else {
             $message = "No contestants available. Contact admin.";
             $continueSession = false;
@@ -78,7 +79,7 @@ elseif ($userSession['step'] == 'menu') {
     
     elseif ($userData == "2") {
         // Show results
-        $contestants = firebaseRequest("GET", "contestants");
+        $contestants = getContestants();
         if ($contestants) {
             $message = "Current Results:\n";
             foreach ($contestants as $code => $contestant) {
@@ -87,7 +88,7 @@ elseif ($userSession['step'] == 'menu') {
             }
             $message .= "\nSend 0 for main menu";
             $continueSession = true;
-            firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'menu']);
+            saveSession($msisdn, ['step' => 'menu']);
         } else {
             $message = "No results available.";
             $continueSession = false;
@@ -100,7 +101,7 @@ elseif ($userSession['step'] == 'menu') {
         $message .= "2. View Results - See current standings\n";
         $message .= "Send 0 for main menu";
         $continueSession = true;
-        firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'menu']);
+        saveSession($msisdn, ['step' => 'menu']);
     }
     
     elseif ($userData == "0") {
@@ -110,7 +111,7 @@ elseif ($userSession['step'] == 'menu') {
         $message .= "3. Help\n";
         $message .= "Enter choice:";
         $continueSession = true;
-        firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'menu']);
+        saveSession($msisdn, ['step' => 'menu']);
     }
     
     else {
@@ -130,12 +131,12 @@ elseif ($userSession['step'] == 'enter_code') {
     
     $contestantCode = strtoupper($userData);
     
-    // Check if contestant exists in database
-    $contestant = firebaseRequest("GET", "contestants/" . $contestantCode);
+    // Check if contestant exists in Firestore
+    $contestant = getContestant($contestantCode);
     
     if ($contestant && isset($contestant['contestant_name'])) {
         // Save selected contestant to session
-        firebaseRequest("PUT", "sessions/" . $msisdn, [
+        saveSession($msisdn, [
             'step' => 'enter_votes',
             'selected_code' => $contestantCode,
             'selected_name' => $contestant['contestant_name']
@@ -148,7 +149,7 @@ elseif ($userSession['step'] == 'enter_code') {
         $message = "Contestant code '" . $contestantCode . "' not found.\n";
         $message .= "Valid codes: FS1, FS2, FS3, FS4, FS5\n";
         $message .= "Enter contestant code or 0 for menu:";
-        firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'enter_code']);
+        saveSession($msisdn, ['step' => 'enter_code']);
     }
 }
 
@@ -165,17 +166,15 @@ elseif ($userSession['step'] == 'enter_votes') {
     if ($numberOfVotes > 0 && $numberOfVotes <= 100) {
         
         $contestantCode = $userSession['selected_code'];
-        $contestant = firebaseRequest("GET", "contestants/" . $contestantCode);
+        $contestant = getContestant($contestantCode);
         
         if ($contestant) {
             // Add votes to existing count
             $currentVotes = isset($contestant['votes']) ? intval($contestant['votes']) : 0;
             $newTotalVotes = $currentVotes + $numberOfVotes;
             
-            // Update contestant votes
-            $updateResult = firebaseRequest("PATCH", "contestants/" . $contestantCode, [
-                "votes" => $newTotalVotes
-            ]);
+            // Update contestant votes in Firestore
+            $updateResult = updateContestantVotes($contestantCode, $newTotalVotes);
             
             // Record transaction
             $transaction = [
@@ -186,7 +185,7 @@ elseif ($userSession['step'] == 'enter_votes') {
                 "timestamp" => time(),
                 "date" => date('Y-m-d H:i:s')
             ];
-            firebaseRequest("POST", "transactions", $transaction);
+            saveTransaction($transaction);
             
             $message = "SUCCESS!\n";
             $message .= $numberOfVotes . " vote(s) added to " . $contestant['contestant_name'] . "\n";
@@ -195,7 +194,7 @@ elseif ($userSession['step'] == 'enter_votes') {
             $continueSession = false;
             
             // Clear session
-            firebaseRequest("DELETE", "sessions/" . $msisdn);
+            deleteSession($msisdn);
         } else {
             $message = "Error: Contestant not found.\n";
             $message .= "Please try again.";
@@ -221,7 +220,7 @@ elseif ($userData == "0") {
     $message .= "3. Help\n";
     $message .= "Enter choice:";
     $continueSession = true;
-    firebaseRequest("PUT", "sessions/" . $msisdn, ['step' => 'menu']);
+    saveSession($msisdn, ['step' => 'menu']);
 }
 
 /*
