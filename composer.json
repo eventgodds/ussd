@@ -3,9 +3,9 @@
     "description": "USSD Application for Ghartey Event Voting System",
     "type": "project",
     "require": {
-        "php": ">=7.4"
+        "php": "8.4"
     },
     "scripts": {
-        "start": "php -S 0.0.0.0:8080"
+        "start": "php -S 0.0.0.0:${PORT:-8080}"
     }
 }
