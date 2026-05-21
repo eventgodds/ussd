@@ -1,11 +1,6 @@
 {
-    "name": "ghartey/ussd-event",
-    "description": "USSD Application for Ghartey Event Voting System",
+    "name": "ghartey/ussd-app",
+    "description": "USSD Voting App",
     "type": "project",
-    "require": {
-        "php": ">=7.4"
-    },
-    "scripts": {
-        "start": "php -S 0.0.0.0:8080"
-    }
+    "require": {}
 }
