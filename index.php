@@ -37,7 +37,6 @@ if (!$userSession || empty($userSession)) {
     $userSession = ['step' => 'menu'];
     saveSession($msisdn, $userSession);
 }
-
 /*
 |--------------------------------------------------------------------------
 | MAIN MENU
