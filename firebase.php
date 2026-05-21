@@ -1,17 +1,11 @@
 <?php
 
-// Firebase configuration - These should be set as Environment Variables
-$firebaseBaseUrl = getenv('FIREBASE_BASE_URL') ?: 'https://eventgodds-41e4f-default-rtdb.firebaseio.com/';
-$firebaseAuthToken = getenv('FIREBASE_AUTH_TOKEN') ?: '';
+$firebaseBaseUrl = 'https://eventgodds-41e4f-default-rtdb.firebaseio.com/';
 
 function firebaseRequest($method, $path, $data = null) {
-    global $firebaseBaseUrl, $firebaseAuthToken;
+    global $firebaseBaseUrl;
     
     $url = rtrim($firebaseBaseUrl, '/') . '/' . ltrim($path, '/') . '.json';
-    
-    if ($firebaseAuthToken) {
-        $url .= '?auth=' . $firebaseAuthToken;
-    }
     
     $ch = curl_init();
     
@@ -38,17 +32,15 @@ function firebaseRequest($method, $path, $data = null) {
     
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json'
-    ]);
-    
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     
     if (curl_errno($ch)) {
-        error_log('Firebase Curl error: ' . curl_error($ch));
+        error_log('Curl error: ' . curl_error($ch));
+        curl_close($ch);
         return null;
     }
     
@@ -62,55 +54,48 @@ function firebaseRequest($method, $path, $data = null) {
     return null;
 }
 
-// Initialize contestants (FS1 to FS5)
+// Initialize contestants FS1 to FS5
 function initializeContestants() {
     $existing = firebaseRequest("GET", "contestants");
     
     if (!$existing || empty($existing)) {
         $contestants = [
             "FS1" => [
-                "contestant_name" => "John Mensah",
+                "contestant_name" => "Contestant FS1",
                 "votes" => 0,
-                "code" => "FS1",
-                "description" => "Vocalist Extraordinaire"
+                "code" => "FS1"
             ],
             "FS2" => [
-                "contestant_name" => "Mary Asante",
+                "contestant_name" => "Contestant FS2",
                 "votes" => 0,
-                "code" => "FS2",
-                "description" => "Dance Sensation"
+                "code" => "FS2"
             ],
             "FS3" => [
-                "contestant_name" => "David Boateng",
+                "contestant_name" => "Contestant FS3",
                 "votes" => 0,
-                "code" => "FS3",
-                "description" => "Master Instrumentalist"
+                "code" => "FS3"
             ],
             "FS4" => [
-                "contestant_name" => "Sarah Owusu",
+                "contestant_name" => "Contestant FS4",
                 "votes" => 0,
-                "code" => "FS4",
-                "description" => "Poetry & Spoken Word"
+                "code" => "FS4"
             ],
             "FS5" => [
-                "contestant_name" => "Michael Kofi",
+                "contestant_name" => "Contestant FS5",
                 "votes" => 0,
-                "code" => "FS5",
-                "description" => "Comedy King"
+                "code" => "FS5"
             ]
         ];
         
         foreach ($contestants as $code => $contestant) {
             firebaseRequest("PUT", "contestants/" . $code, $contestant);
         }
-        
         return true;
     }
-    
     return false;
 }
 
-// Call initialization
+// Run initialization
 initializeContestants();
 
 ?>
