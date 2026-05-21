@@ -1,9 +1,7 @@
 .env
-.env.local
-.env.production
 vendor/
 *.log
 .DS_Store
 .idea/
 .vscode/
-composer.lock
+test.php
