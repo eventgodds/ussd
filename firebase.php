@@ -1,6 +1,5 @@
 <?php
 
-// Firebase Firestore configuration
 $firebaseProjectId = 'eventgodds-41e4f';
 $firebaseApiKey = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
 
