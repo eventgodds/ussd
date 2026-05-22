@@ -1,276 +1,281 @@
 <?php
-// ============================================
-// COMPLETE USSD VOTING SYSTEM - SINGLE FILE
-// ============================================
+/*
+|--------------------------------------------------------------------------
+| SINGLE FILE USSD APPLICATION WITH FIREBASE FIRESTORE
+|--------------------------------------------------------------------------
+|
+| This file handles USSD requests, interacts with Firebase Firestore,
+| and returns the appropriate JSON response for Arkesel.
+|
+*/
 
-// Get USSD input from Arkesel
-$json = file_get_contents('php://input');
-$data = json_decode($json, true);
+// Enable error reporting for debugging (disable in production)
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
 
-$sessionID = $data['sessionID'] ?? '';
-$userID = $data['userID'] ?? '';
-$msisdn = $data['msisdn'] ?? '';
-$newSession = $data['newSession'] ?? false;
-$userData = trim($data['userData'] ?? '');
+/*
+|--------------------------------------------------------------------------
+| 1. RECEIVE AND PARSE USSD REQUEST
+|--------------------------------------------------------------------------
+*/
+$rawInput = file_get_contents('php://input');
+$data = json_decode($rawInput, true);
 
-// ============================================
-// FIREBASE FIRESTORE DIRECT ACCESS
-// ============================================
+// Arkesel sends these fields
+$sessionID   = $data['sessionID'] ?? '';
+$userID      = $data['userID'] ?? '';
+$msisdn      = $data['msisdn'] ?? '';
+$newSession  = $data['newSession'] ?? false;
+$userData    = trim($data['userData'] ?? '');
 
-$FIREBASE_PROJECT = 'eventgodds-41e4f';
-$FIREBASE_KEY = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
+// For debugging (logs to a file)
+file_put_contents('ussd_debug.log', date('Y-m-d H:i:s') . " - Input: " . $rawInput . PHP_EOL, FILE_APPEND);
 
-// Function to get all contestants from Firestore
-function getAllContestants() {
-    global $FIREBASE_PROJECT, $FIREBASE_KEY;
-    
-    $url = "https://firestore.googleapis.com/v1/projects/{$FIREBASE_PROJECT}/databases/(default)/documents/contestants?key={$FIREBASE_KEY}";
+/*
+|--------------------------------------------------------------------------
+| 2. FIREBASE FIRESTORE CONFIGURATION
+|--------------------------------------------------------------------------
+*/
+const FB_PROJECT_ID = 'eventgodds-41e4f';
+const FB_API_KEY    = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
+
+/**
+ * Fetch all documents from a Firestore collection
+ */
+function firestoreGetCollection(string $collection): array {
+    $url = sprintf(
+        'https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents/%s?key=%s',
+        FB_PROJECT_ID,
+        $collection,
+        FB_API_KEY
+    );
     
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_TIMEOUT => 10
+    ]);
+    
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
-    if ($httpCode != 200) {
+    if ($httpCode !== 200) {
+        file_put_contents('ussd_debug.log', "Firestore error: HTTP $httpCode - $response" . PHP_EOL, FILE_APPEND);
         return [];
     }
     
     $data = json_decode($response, true);
-    $contestants = [];
+    $documents = [];
     
-    if (isset($data['documents']) && is_array($data['documents'])) {
+    if (isset($data['documents'])) {
         foreach ($data['documents'] as $doc) {
-            $contestant = [];
-            
-            // Get contestant name
-            if (isset($doc['fields']['contestant_name']['stringValue'])) {
-                $contestant['name'] = $doc['fields']['contestant_name']['stringValue'];
-            } elseif (isset($doc['fields']['name']['stringValue'])) {
-                $contestant['name'] = $doc['fields']['name']['stringValue'];
-            } else {
-                $contestant['name'] = 'Unknown';
+            $item = [];
+            foreach ($doc['fields'] as $key => $value) {
+                // Handle different Firestore value types
+                if (isset($value['stringValue'])) {
+                    $item[$key] = $value['stringValue'];
+                } elseif (isset($value['integerValue'])) {
+                    $item[$key] = (int)$value['integerValue'];
+                } elseif (isset($value['doubleValue'])) {
+                    $item[$key] = (float)$value['doubleValue'];
+                } elseif (isset($value['booleanValue'])) {
+                    $item[$key] = (bool)$value['booleanValue'];
+                }
             }
-            
-            // Get contestant code
-            if (isset($doc['fields']['code']['stringValue'])) {
-                $contestant['code'] = $doc['fields']['code']['stringValue'];
-            } elseif (isset($doc['fields']['contestant_code']['stringValue'])) {
-                $contestant['code'] = $doc['fields']['contestant_code']['stringValue'];
-            } else {
-                $contestant['code'] = '';
-            }
-            
-            // Only add if we have a code
-            if (!empty($contestant['code'])) {
-                $contestants[] = $contestant;
-            }
+            // Add document ID if needed
+            $item['_id'] = basename($doc['name']);
+            $documents[] = $item;
         }
     }
     
-    return $contestants;
+    return $documents;
 }
 
-// Function to find contestant by code
-function findContestantByCode($searchCode) {
-    $contestants = getAllContestants();
+/**
+ * Find a contestant by their code (case-insensitive)
+ */
+function findContestantByCode(string $searchCode): ?array {
+    $contestants = firestoreGetCollection('contestants');
+    
     foreach ($contestants as $contestant) {
-        if (strtoupper($contestant['code']) == strtoupper($searchCode)) {
+        // Check multiple possible field names for the code
+        $code = $contestant['code'] ?? $contestant['contestant_code'] ?? $contestant['id'] ?? '';
+        if (strtoupper(trim($code)) === strtoupper(trim($searchCode))) {
             return $contestant;
         }
     }
+    
     return null;
 }
 
-// Function to save vote to Firestore
-function saveVote($msisdn, $contestantCode, $contestantName) {
-    global $FIREBASE_PROJECT, $FIREBASE_KEY;
+/**
+ * Save a vote to Firestore
+ */
+function saveVote(array $voteData): bool {
+    $url = sprintf(
+        'https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents/votes?key=%s',
+        FB_PROJECT_ID,
+        FB_API_KEY
+    );
     
-    $voteId = uniqid('vote_');
-    $timestamp = date('Y-m-d H:i:s');
-    
-    $url = "https://firestore.googleapis.com/v1/projects/{$FIREBASE_PROJECT}/databases/(default)/documents/votes/{$voteId}?key={$FIREBASE_KEY}";
-    
-    $voteData = [
-        'fields' => [
-            'msisdn' => ['stringValue' => $msisdn],
-            'contestant_code' => ['stringValue' => $contestantCode],
-            'contestant_name' => ['stringValue' => $contestantName],
-            'timestamp' => ['stringValue' => $timestamp],
-            'status' => ['stringValue' => 'completed']
-        ]
-    ];
+    // Convert to Firestore document format
+    $firestoreDoc = ['fields' => []];
+    foreach ($voteData as $key => $value) {
+        $firestoreDoc['fields'][$key] = ['stringValue' => (string)$value];
+    }
+    // Add a timestamp if not present
+    if (!isset($voteData['timestamp'])) {
+        $firestoreDoc['fields']['timestamp'] = ['stringValue' => date('Y-m-d H:i:s')];
+    }
     
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($voteData));
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($firestoreDoc),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_TIMEOUT => 10
+    ]);
+    
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
-    return ($httpCode == 200);
+    $success = ($httpCode === 200);
+    file_put_contents('ussd_debug.log', "Save vote: " . ($success ? 'OK' : 'FAILED') . " - HTTP $httpCode" . PHP_EOL, FILE_APPEND);
+    
+    return $success;
 }
 
-// ============================================
-// USSD MENU SYSTEM
-// ============================================
-
-$message = "";
+/*
+|--------------------------------------------------------------------------
+| 3. USSD APPLICATION LOGIC
+|--------------------------------------------------------------------------
+*/
+$message = '';
 $continueSession = true;
 
-// Store user state in session
-session_start();
-$stateKey = "ussd_state_{$sessionID}";
-$currentState = $_SESSION[$stateKey] ?? 'main';
+// Split user input for multi-level menus (e.g., "1*FS1")
+$inputParts = explode('*', $userData);
+$mainOption = $inputParts[0] ?? '';
 
-// NEW SESSION - Reset everything
-if ($newSession == true) {
-    $_SESSION[$stateKey] = 'main';
-    $currentState = 'main';
+// NEW SESSION: Show Main Menu
+if ($newSession === true) {
+    $message = "Welcome to Ghartey Event\n";
+    $message .= "1. Vote\n";
+    $message .= "2. View Contestants\n";
+    $message .= "0. Exit";
 }
-
-// Handle USSD input based on state
-if ($currentState == 'main') {
-    if ($userData == "") {
-        // Show main menu
-        $message = "Welcome to Ghartey Event\n";
-        $message .= "========================\n";
-        $message .= "1. Vote for Contestant\n";
-        $message .= "2. View All Contestants\n";
-        $message .= "0. Exit";
-        $continueSession = true;
-        $_SESSION[$stateKey] = 'main';
-    }
-    elseif ($userData == "1") {
-        // Go to vote menu
-        $_SESSION[$stateKey] = 'vote_ask_code';
-        $message = "Enter contestant code:\n";
-        $message .= "(Example: FS1, FS2, etc.)\n";
-        $message .= "0. Back to Menu";
-        $continueSession = true;
-    }
-    elseif ($userData == "2") {
-        // Show all contestants
-        $contestants = getAllContestants();
-        
-        if (count($contestants) > 0) {
-            $message = "📋 CONTESTANTS LIST\n";
-            $message .= "========================\n";
-            foreach ($contestants as $index => $c) {
-                $num = $index + 1;
-                $message .= "$num. {$c['name']}\n";
-                $message .= "   Code: {$c['code']}\n";
-                $message .= "------------------------\n";
-            }
-            $message .= "\n0. Back to Menu\n";
-            $message .= "1. Vote Now";
-        } else {
-            $message = "No contestants found.\n0. Back to Menu";
+// EXIT
+elseif ($userData === '0' || $userData === '00') {
+    $message = "Thank you for using Ghartey Event Voting System";
+    $continueSession = false;
+}
+// VIEW CONTESTANTS (Option 2)
+elseif ($mainOption === '2') {
+    $contestants = firestoreGetCollection('contestants');
+    
+    if (empty($contestants)) {
+        $message = "No contestants found at this time.\n0. Back to Menu";
+    } else {
+        $message = "📋 CONTESTANTS LIST\n";
+        $message .= "━━━━━━━━━━━━━━━━\n";
+        foreach ($contestants as $idx => $c) {
+            $name = $c['contestant_name'] ?? $c['name'] ?? 'Unknown';
+            $code = $c['code'] ?? $c['contestant_code'] ?? 'N/A';
+            $message .= ($idx + 1) . ". $name\n";
+            $message .= "   Code: $code\n";
+            $message .= "━━━━━━━━━━━━━━━━\n";
+            if ($idx >= 9) break; // USSD screen limit
         }
-        
-        $_SESSION[$stateKey] = 'main';
-        $continueSession = true;
-    }
-    elseif ($userData == "0") {
-        // Exit
-        $message = "Thank you for using Ghartey Event Voting System!\n";
-        $message .= "Goodbye!";
-        $continueSession = false;
-        session_destroy();
-    }
-    else {
-        // Invalid input
-        $message = "Invalid option: '$userData'\n";
-        $message .= "Please try again:\n";
-        $message .= "1. Vote\n";
-        $message .= "2. View Contestants\n";
-        $message .= "0. Exit";
-        $continueSession = true;
+        $message .= "0. Back to Main Menu";
     }
 }
-elseif ($currentState == 'vote_ask_code') {
-    if ($userData == "0") {
-        // Go back to main menu
-        $_SESSION[$stateKey] = 'main';
-        $message = "Main Menu\n";
-        $message .= "1. Vote\n";
-        $message .= "2. View Contestants\n";
-        $message .= "0. Exit";
-        $continueSession = true;
-    }
-    else {
-        // Process the vote
-        $contestantCode = strtoupper(trim($userData));
-        $contestant = findContestantByCode($contestantCode);
+// VOTE - Ask for contestant code (Option 1, first level)
+elseif ($mainOption === '1' && count($inputParts) === 1) {
+    $message = "Enter contestant code (e.g., FS1, FS2, etc.):";
+}
+// VOTE - Process the vote (Option 1 with code, e.g., "1*FS1")
+elseif ($mainOption === '1' && count($inputParts) === 2) {
+    $contestantCode = strtoupper(trim($inputParts[1]));
+    
+    // Find the contestant in Firestore
+    $contestant = findContestantByCode($contestantCode);
+    
+    if ($contestant) {
+        $contestantName = $contestant['contestant_name'] ?? $contestant['name'] ?? 'Unknown';
         
-        if ($contestant) {
-            // Save vote to Firestore
-            $voteSaved = saveVote($msisdn, $contestantCode, $contestant['name']);
-            
-            if ($voteSaved) {
-                $message = "✅ VOTE SUCCESSFUL!\n";
-                $message .= "========================\n";
-                $message .= "You voted for:\n";
-                $message .= "{$contestant['name']}\n";
-                $message .= "Code: {$contestantCode}\n";
-                $message .= "========================\n";
-                $message .= "Thank you for voting!\n";
-                $message .= "\n1. Vote Again\n";
-                $message .= "0. Main Menu";
-            } else {
-                $message = "❌ ERROR: Could not save vote.\n";
-                $message .= "Please try again.\n";
-                $message .= "1. Try Again\n";
-                $message .= "0. Main Menu";
-            }
+        // Prepare vote data
+        $voteRecord = [
+            'msisdn' => $msisdn,
+            'userID' => $userID,
+            'sessionID' => $sessionID,
+            'contestant_code' => $contestantCode,
+            'contestant_name' => $contestantName,
+            'status' => 'completed',
+            'voted_at' => date('Y-m-d H:i:s')
+        ];
+        
+        // Save vote to Firestore
+        $saved = saveVote($voteRecord);
+        
+        if ($saved) {
+            $message = "✅ VOTE SUCCESSFUL!\n";
+            $message .= "━━━━━━━━━━━━━━━━\n";
+            $message .= "You voted for: $contestantName\n";
+            $message .= "Contestant Code: $contestantCode\n";
+            $message .= "━━━━━━━━━━━━━━━━\n";
+            $message .= "Thank you for participating!\n\n";
+            $message .= "1. Vote Again\n";
+            $message .= "0. Main Menu";
         } else {
-            $message = "❌ Contestant code '$contestantCode' not found!\n";
-            $message .= "Please check the code and try again.\n";
-            $message .= "\n1. Try Again\n";
+            $message = "❌ Error saving your vote.\n";
+            $message .= "Please try again.\n\n";
+            $message .= "1. Try Again\n";
             $message .= "0. Main Menu";
         }
-        
-        $_SESSION[$stateKey] = 'vote_result';
-        $continueSession = true;
-    }
-}
-elseif ($currentState == 'vote_result') {
-    if ($userData == "1") {
-        // Vote again
-        $_SESSION[$stateKey] = 'vote_ask_code';
-        $message = "Enter contestant code:\n";
-        $message .= "(Example: FS1, FS2, etc.)\n";
-        $message .= "0. Back to Menu";
-        $continueSession = true;
-    }
-    elseif ($userData == "0") {
-        // Back to main menu
-        $_SESSION[$stateKey] = 'main';
-        $message = "Main Menu\n";
-        $message .= "1. Vote\n";
+    } else {
+        $message = "❌ Contestant code '$contestantCode' not found!\n";
+        $message .= "Please check the code and try again.\n\n";
+        $message .= "1. Try Again\n";
         $message .= "2. View Contestants\n";
-        $message .= "0. Exit";
-        $continueSession = true;
-    }
-    else {
-        $message = "Invalid option.\n";
-        $message .= "1. Vote Again\n";
         $message .= "0. Main Menu";
-        $continueSession = true;
     }
 }
+// VOTE AGAIN (Option 1 from confirmation menu)
+elseif ($userData === '1*1') {
+    $message = "Enter contestant code (e.g., FS1, FS2, etc.):";
+}
+// HANDLE "TRY AGAIN" or any other navigation
+elseif ($mainOption === '1' && isset($inputParts[1]) && $inputParts[1] === '1') {
+    // This catches the "1. Try Again" option from error menus
+    $message = "Enter contestant code:";
+}
+// BACK TO MAIN MENU from any sub-menu
+elseif ($userData === '0' || $userData === '00' || $userData === '1*0') {
+    $message = "Main Menu\n";
+    $message .= "1. Vote\n";
+    $message .= "2. View Contestants\n";
+    $message .= "0. Exit";
+}
+// DEFAULT / INVALID INPUT
+else {
+    $message = "Invalid selection.\n\n";
+    $message .= "1. Vote\n";
+    $message .= "2. View Contestants\n";
+    $message .= "0. Exit";
+}
 
-// ============================================
-// SEND RESPONSE BACK TO ARKESEL
-// ============================================
-
+/*
+|--------------------------------------------------------------------------
+| 4. SEND RESPONSE BACK TO ARKESEL
+|--------------------------------------------------------------------------
+*/
 $response = [
     "sessionID" => $sessionID,
     "userID" => $userID,
@@ -279,10 +284,9 @@ $response = [
     "continueSession" => $continueSession
 ];
 
-// Save session
-session_write_close();
+// Log outgoing response for debugging
+file_put_contents('ussd_debug.log', date('Y-m-d H:i:s') . " - Response: " . json_encode($response) . PHP_EOL . PHP_EOL, FILE_APPEND);
 
 // Send JSON response
 header('Content-Type: application/json');
 echo json_encode($response);
-?>
