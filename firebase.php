@@ -111,8 +111,11 @@ function updateContestantVotes($code, $newVotes) {
         ]
     ];
     
-    $result = firestoreRequest('PATCH', "contestants/$documentId", $updateData);
-    
+$result = firestoreRequest(
+    'PATCH',
+    "contestants/$documentId?updateMask.fieldPaths=votes",
+    $updateData
+);    
     return $result !== null;
 }
 
