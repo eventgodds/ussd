@@ -11,6 +11,9 @@ error_reporting(E_ALL);
 $json = file_get_contents('php://input');
 $data = json_decode($json, true);
 
+// For debugging - log what we receive
+error_log("USSD Request: " . print_r($data, true));
+
 $sessionID = $data['sessionID'] ?? '';
 $userID = $data['userID'] ?? '';
 $msisdn = $data['msisdn'] ?? '';
@@ -35,8 +38,17 @@ function getFromFirestore($collection) {
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
     $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+    
+    error_log("Firestore Response Code: " . $httpCode);
+    error_log("Firestore Response: " . substr($response, 0, 500));
+    
+    if ($httpCode != 200) {
+        return [];
+    }
     
     $data = json_decode($response, true);
     $results = [];
@@ -49,6 +61,8 @@ function getFromFirestore($collection) {
                     $item[$key] = $value['stringValue'];
                 } elseif (isset($value['integerValue'])) {
                     $item[$key] = $value['integerValue'];
+                } elseif (isset($value['doubleValue'])) {
+                    $item[$key] = $value['doubleValue'];
                 }
             }
             $results[] = $item;
@@ -66,93 +80,105 @@ function getFromFirestore($collection) {
 
 $message = "";
 $continueSession = true;
-$input = explode('*', $userData);
+
+// For USSD, userData comes as a string like "1" or "1*FS1"
+// We need to handle the input properly
+$input = $userData;
+error_log("User Input: '$input'");
+error_log("New Session: " . ($newSession ? 'true' : 'false'));
 
 /*
 |--------------------------------------------------------------------------
-| USSD MENU LOGIC
+| USSD MENU LOGIC - SIMPLIFIED
 |--------------------------------------------------------------------------
 */
 
-// Main Menu
+// Case 1: New session - show main menu
 if ($newSession == true) {
     $message = "Welcome to Ghartey Event\n";
     $message .= "1. Vote\n";
     $message .= "2. View Contestants\n";
     $message .= "0. Exit";
 }
-// Exit
-elseif ($input[0] == "0") {
-    $message = "Thank you for using Ghartey Event Voting System";
+// Case 2: User selected 0 to exit
+elseif ($input === "0") {
+    $message = "Thank you for using Ghartey Event";
     $continueSession = false;
 }
-// View Contestants
-elseif ($input[0] == "2") {
+// Case 3: User selected 2 - View Contestants
+elseif ($input === "2") {
     $contestants = getFromFirestore("contestants");
     
+    error_log("Contestants found: " . count($contestants));
+    
     if (count($contestants) > 0) {
-        $message = "CONTESTANTS LIST\n";
-        $message .= "----------------\n";
+        $message = "CONTESTANTS:\n";
+        $count = 1;
         foreach ($contestants as $c) {
-            $name = isset($c['contestant_name']) ? $c['contestant_name'] : (isset($c['name']) ? $c['name'] : 'Unknown');
-            $code = isset($c['code']) ? $c['code'] : (isset($c['contestant_code']) ? $c['contestant_code'] : 'N/A');
-            $message .= "$name\n";
-            $message .= "Code: $code\n";
-            $message .= "----------------\n";
+            $name = $c['contestant_name'] ?? $c['name'] ?? 'Unknown';
+            $code = $c['code'] ?? $c['contestant_code'] ?? 'N/A';
+            $message .= "$count. $name (Code: $code)\n";
+            $count++;
+            if ($count > 10) break; // Limit for USSD
         }
-        $message .= "0. Back to Menu";
+        $message .= "\n0. Back";
     } else {
-        $message = "No contestants found\n0. Back to Menu";
+        $message = "No contestants found\n0. Back";
     }
 }
-// Vote - Ask for code
-elseif ($input[0] == "1" && count($input) == 1) {
+// Case 4: User selected 1 - Vote (ask for code)
+elseif ($input === "1") {
     $message = "Enter contestant code:";
 }
-// Vote - Process vote
-elseif ($input[0] == "1" && count($input) == 2) {
-    $contestantCode = strtoupper($input[1]);
+// Case 5: User entered code like "1*FS1" - process vote
+elseif (strpos($input, "1*") === 0) {
+    // Extract the code (everything after "1*")
+    $parts = explode("*", $input);
+    $contestantCode = strtoupper(trim($parts[1] ?? ''));
     
-    // Get all contestants to find matching code
+    error_log("Looking for contestant code: " . $contestantCode);
+    
+    // Get all contestants
     $contestants = getFromFirestore("contestants");
     $found = null;
     
     foreach ($contestants as $c) {
-        $code = isset($c['code']) ? $c['code'] : (isset($c['contestant_code']) ? $c['contestant_code'] : '');
-        if ($code == $contestantCode) {
+        $code = $c['code'] ?? $c['contestant_code'] ?? '';
+        error_log("Comparing with: " . $code);
+        if (strtoupper($code) === $contestantCode) {
             $found = $c;
             break;
         }
     }
     
     if ($found) {
-        $name = isset($found['contestant_name']) ? $found['contestant_name'] : (isset($found['name']) ? $found['name'] : 'Unknown');
+        $name = $found['contestant_name'] ?? $found['name'] ?? 'Unknown';
         $message = "✓ VOTE SUCCESSFUL!\n";
         $message .= "You voted for: $name\n";
         $message .= "Code: $contestantCode\n";
-        $message .= "Thank you for voting!\n";
+        $message .= "Thank you!\n";
         $message .= "1. Vote Again\n";
-        $message .= "0. Main Menu";
+        $message .= "0. Menu";
     } else {
-        $message = "Contestant code '$contestantCode' not found!\n";
+        $message = "Code '$contestantCode' not found!\n";
         $message .= "1. Try Again\n";
-        $message .= "0. Main Menu";
+        $message .= "0. Menu";
     }
 }
-// Vote again
-elseif ($input[0] == "1" && isset($input[1]) && $input[1] == "1") {
+// Case 6: Vote again
+elseif ($input === "1*1") {
     $message = "Enter contestant code:";
 }
-// Back to main menu
-elseif ($input[0] == "00" || (isset($input[1]) && $input[1] == "0")) {
+// Case 7: Back to menu from anywhere
+elseif ($input === "00" || $input === "0*0") {
     $message = "Main Menu\n";
     $message .= "1. Vote\n";
     $message .= "2. View Contestants\n";
     $message .= "0. Exit";
 }
-// Invalid input
+// Default: Invalid input
 else {
-    $message = "Invalid option\n";
+    $message = "Invalid option: '$input'\n";
     $message .= "1. Vote\n";
     $message .= "2. View Contestants\n";
     $message .= "0. Exit";
@@ -171,6 +197,8 @@ $response = [
     "message" => $message,
     "continueSession" => $continueSession
 ];
+
+error_log("Response: " . print_r($response, true));
 
 header('Content-Type: application/json');
 echo json_encode($response);
