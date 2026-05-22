@@ -45,7 +45,7 @@ $input = explode('*', $userData);
 
 if ($newSession == true) {
     $message = "Welcome to Ghartey Event Voting System\n";
-    $message .= "1. Vote (₵10 per vote)\n";
+    $message .= "1. Vote\n";
     $message .= "2. Check Contestants\n";
     $message .= "3. My Voting History\n";
     $message .= "4. Support";
