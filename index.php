@@ -3,7 +3,7 @@ ini_set('display_errors', 1);
 error_reporting(E_ALL);
 session_start();
 
-require_once 'firebase.php';
+require 'firebase.php';
 
 /*
 |--------------------------------------------------------------------------
@@ -37,10 +37,11 @@ $continueSession = true;
 
 $input = explode('*', $userData);
 error_log("USSD Input: " . print_r($input, true));
+error_log("New Session: " . ($newSession ? 'Yes' : 'No'));
 
 /*
 |--------------------------------------------------------------------------
-| MAIN MENU - NEW SESSION
+| MAIN MENU
 |--------------------------------------------------------------------------
 */
 
@@ -50,11 +51,6 @@ if ($newSession == true) {
     $message .= "2. Check Contestants\n";
     $message .= "0. Exit";
 }
-/*
-|--------------------------------------------------------------------------
-| EXIT
-|--------------------------------------------------------------------------
-*/
 elseif (count($input) == 1 && $input[0] == "0") {
     $message = "Thank you for using Ghartey Event Voting System";
     $continueSession = false;
@@ -62,64 +58,81 @@ elseif (count($input) == 1 && $input[0] == "0") {
 
 /*
 |--------------------------------------------------------------------------
-| OPTION 2 - CHECK ALL CONTESTANTS
+| STEP 1 - CHECK CONTESTANTS (Option 2)
 |--------------------------------------------------------------------------
 */
 elseif (count($input) == 1 && $input[0] == "2") {
     $contestants = getAllContestants();
     
     if ($contestants && count($contestants) > 0) {
-        $message = "=== ALL CONTESTANTS ===\n";
-        foreach ($contestants as $index => $contestant) {
-            $message .= ($index + 1) . ". " . ($contestant['stageName'] ?? $contestant['name']) . "\n";
-            $message .= "   Code: " . ($contestant['code'] ?? 'N/A') . "\n";
-            $message .= "   Votes: " . ($contestant['votes'] ?? 0) . "\n";
-            $message .= "-------------------\n";
+        $message = "Available Contestants:\n";
+        $message .= "━━━━━━━━━━━━━━━\n";
+        $counter = 1;
+        foreach ($contestants as $contestant) {
+            $code = $contestant['code'] ?? 'N/A';
+            $stageName = $contestant['stageName'] ?? $contestant['name'] ?? 'Unknown';
+            $votes = $contestant['votes'] ?? 0;
+            $message .= $counter . ". " . $stageName . "\n";
+            $message .= "   Code: " . $code . " | Votes: " . $votes . "\n";
+            $counter++;
+            if ($counter > 5) break;
         }
+        $message .= "━━━━━━━━━━━━━━━\n";
         $message .= "Enter code to vote or 0 for Main Menu";
     } else {
-        $message = "No contestants found\n0. Main Menu";
+        $message = "No contestants available\n0. Back to Main Menu";
     }
     $continueSession = true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| OPTION 1 - START VOTE PROCESS (User selects Vote)
+| STEP 1 - USER SELECTS VOTE (Option 1)
 |--------------------------------------------------------------------------
 */
 elseif (count($input) == 1 && $input[0] == "1") {
-    $message = "Enter contestant code (Example: FS1, FS2, FS3, FS4, FS5):";
+    $message = "Enter contestant code (e.g., FS1, FS2, FS3, FS4, FS5):";
+    $continueSession = true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| STEP 2 - SHOW CONTESTANT DETAILS AFTER CODE ENTERED
+| STEP 2 - SHOW CONTESTANT DETAILS AND CONFIRM VOTE
 |--------------------------------------------------------------------------
 */
 elseif (count($input) == 2 && $input[0] == "1") {
     $contestantCode = strtoupper(trim($input[1]));
-    error_log("Searching for contestant code: " . $contestantCode);
+    error_log("Looking for contestant code: " . $contestantCode);
     
     // Search for contestant by code
     $contestant = getContestantByCode($contestantCode);
     
     if ($contestant) {
-        // Store in session for later
-        $_SESSION['voting_for'] = $contestant;
+        error_log("Found contestant: " . print_r($contestant, true));
         
-        $message = "=== CONFIRM VOTE ===\n";
+        // Store in session
+        $_SESSION['voting_for'] = $contestantCode;
+        
+        $message = "╔══════════════════════╗\n";
+        $message .= "    CONFIRM VOTE\n";
+        $message .= "╚══════════════════════╝\n";
         $message .= "Stage Name: " . ($contestant['stageName'] ?? $contestant['name']) . "\n";
         $message .= "Code: " . $contestantCode . "\n";
         $message .= "Current Votes: " . ($contestant['votes'] ?? 0) . "\n";
         $message .= "Vote Amount: " . ($contestant['voteAmount'] ?? 1) . " vote(s)\n";
-        $message .= "==================\n";
+        if (!empty($contestant['bio'])) {
+            $bio = substr($contestant['bio'], 0, 50);
+            $message .= "Bio: " . $bio . "...\n";
+        }
+        $message .= "━━━━━━━━━━━━━━━\n";
         $message .= "1. Confirm Vote\n";
         $message .= "2. Cancel\n";
         $message .= "0. Main Menu";
     } else {
-        $message = "❌ Contestant code '$contestantCode' not found!\n";
+        error_log("Contestant not found with code: " . $contestantCode);
+        $message = "❌ Contestant code '" . $contestantCode . "' not found.\n";
         $message .= "Please check the code and try again.\n";
+        $message .= "━━━━━━━━━━━━━━━\n";
         $message .= "1. Try Again\n";
         $message .= "2. View All Contestants\n";
         $message .= "0. Main Menu";
@@ -129,45 +142,42 @@ elseif (count($input) == 2 && $input[0] == "1") {
 
 /*
 |--------------------------------------------------------------------------
-| STEP 3 - PROCESS CONFIRMED VOTE
+| STEP 3 - PROCESS THE VOTE
 |--------------------------------------------------------------------------
 */
 elseif (count($input) == 3 && $input[0] == "1" && $input[2] == "1") {
-    // Get contestant from session
-    $contestant = $_SESSION['voting_for'] ?? null;
+    $contestantCode = $_SESSION['voting_for'] ?? $input[1];
+    error_log("Processing vote for: " . $contestantCode);
     
-    if (!$contestant) {
-        $message = "Session expired. Please start over.\n";
-        $message .= "1. Vote\n";
-        $message .= "0. Main Menu";
-        $continueSession = true;
-    } else {
-        $contestantCode = $contestant['code'];
+    // Get fresh contestant data
+    $contestant = getContestantByCode($contestantCode);
+    
+    if ($contestant) {
         $voteAmount = $contestant['voteAmount'] ?? 1;
         $currentVotes = $contestant['votes'] ?? 0;
         $newVotes = $currentVotes + $voteAmount;
+        
+        error_log("Updating votes from $currentVotes to $newVotes");
         
         // Update votes in Firestore
         $updateResult = updateContestantVotes($contestantCode, $newVotes);
         
         if ($updateResult) {
             // Record vote history
-            $voteRecord = [
-                'msisdn' => $msisdn,
+            $voteData = [
                 'userID' => $userID,
+                'msisdn' => $msisdn,
                 'contestant_code' => $contestantCode,
                 'contestant_name' => $contestant['stageName'] ?? $contestant['name'],
                 'votes_cast' => $voteAmount,
-                'previous_votes' => $currentVotes,
-                'new_votes' => $newVotes,
                 'timestamp' => date('Y-m-d H:i:s'),
                 'sessionID' => $sessionID
             ];
-            saveVoteHistory($voteRecord);
+            saveVoteRecord($voteData);
             
             $message = "✅ VOTE SUCCESSFUL! ✅\n";
             $message .= "━━━━━━━━━━━━━━━\n";
-            $message .= "Voted for: " . ($contestant['stageName'] ?? $contestant['name']) . "\n";
+            $message .= "You voted for: " . ($contestant['stageName'] ?? $contestant['name']) . "\n";
             $message .= "Code: " . $contestantCode . "\n";
             $message .= "Votes Cast: " . $voteAmount . "\n";
             $message .= "Total Votes Now: " . $newVotes . "\n";
@@ -177,13 +187,17 @@ elseif (count($input) == 3 && $input[0] == "1" && $input[2] == "1") {
             $message .= "2. Main Menu\n";
             $message .= "0. Exit";
             
-            // Clear session
             unset($_SESSION['voting_for']);
         } else {
+            error_log("Failed to update votes for: " . $contestantCode);
             $message = "❌ Error recording vote. Please try again.\n";
             $message .= "1. Try Again\n";
             $message .= "0. Main Menu";
         }
+    } else {
+        $message = "❌ Contestant not found. Please try again.\n";
+        $message .= "1. Back to Vote\n";
+        $message .= "0. Main Menu";
     }
     $continueSession = true;
 }
@@ -204,29 +218,33 @@ elseif (count($input) == 3 && $input[0] == "1" && $input[2] == "2") {
 
 /*
 |--------------------------------------------------------------------------
-| TRY AGAIN - Invalid code menu option 1
+| TRY AGAIN
 |--------------------------------------------------------------------------
 */
 elseif (count($input) == 2 && $input[0] == "1" && $input[1] == "1") {
-    $message = "Enter contestant code (Example: FS1, FS2, FS3, FS4, FS5):";
+    $message = "Enter contestant code (e.g., FS1, FS2, FS3, FS4, FS5):";
     $continueSession = true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| VIEW ALL CONTESTANTS - From invalid code menu option 2
+| VIEW ALL CONTESTANTS
 |--------------------------------------------------------------------------
 */
 elseif (count($input) == 2 && $input[0] == "1" && $input[1] == "2") {
     $contestants = getAllContestants();
     
     if ($contestants && count($contestants) > 0) {
-        $message = "=== ALL CONTESTANTS ===\n";
-        foreach ($contestants as $index => $contestant) {
-            $message .= ($index + 1) . ". " . ($contestant['stageName'] ?? $contestant['name']) . "\n";
-            $message .= "   Code: " . ($contestant['code'] ?? 'N/A') . "\n";
-            $message .= "   Votes: " . ($contestant['votes'] ?? 0) . "\n";
-            $message .= "-------------------\n";
+        $message = "📋 ALL CONTESTANTS 📋\n";
+        $message .= "━━━━━━━━━━━━━━━\n";
+        foreach ($contestants as $contestant) {
+            $code = $contestant['code'] ?? 'N/A';
+            $stageName = $contestant['stageName'] ?? $contestant['name'] ?? 'Unknown';
+            $votes = $contestant['votes'] ?? 0;
+            $message .= "⭐ " . $stageName . "\n";
+            $message .= "   Code: " . $code . "\n";
+            $message .= "   Votes: " . $votes . "\n";
+            $message .= "━━━━━━━━━━━━━━━\n";
         }
         $message .= "Enter code to vote or 0 for Main Menu";
     } else {
@@ -237,11 +255,12 @@ elseif (count($input) == 2 && $input[0] == "1" && $input[1] == "2") {
 
 /*
 |--------------------------------------------------------------------------
-| VOTE AGAIN (After successful vote)
+| VOTE AGAIN
 |--------------------------------------------------------------------------
 */
-elseif (count($input) == 2 && $input[0] == "1" && $input[1] == "1") {
-    $message = "Enter contestant code (Example: FS1, FS2, FS3, FS4, FS5):";
+elseif ((count($input) == 2 && $input[0] == "1" && $input[1] == "1") ||
+        (count($input) == 2 && $input[0] == "1" && $input[1] == "2")) {
+    $message = "Enter contestant code:";
     $continueSession = true;
 }
 
@@ -250,15 +269,8 @@ elseif (count($input) == 2 && $input[0] == "1" && $input[1] == "1") {
 | MAIN MENU NAVIGATION
 |--------------------------------------------------------------------------
 */
-elseif ((count($input) == 2 && $input[0] == "1" && $input[1] == "2") ||
-        (count($input) == 2 && $input[0] == "1" && $input[1] == "0")) {
-    $message = "Main Menu\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Contestants\n";
-    $message .= "0. Exit";
-    $continueSession = true;
-}
-elseif (count($input) == 1 && $input[0] == "00") {
+elseif ((count($input) == 2 && $input[0] == "1" && $input[1] == "0") ||
+        (count($input) == 1 && $input[0] == "00")) {
     $message = "Main Menu\n";
     $message .= "1. Vote\n";
     $message .= "2. Check Contestants\n";
@@ -268,12 +280,13 @@ elseif (count($input) == 1 && $input[0] == "00") {
 
 /*
 |--------------------------------------------------------------------------
-| INVALID INPUT HANDLER - CATCH EVERYTHING ELSE
+| INVALID INPUT
 |--------------------------------------------------------------------------
 */
 else {
-    error_log("Unhandled input: " . print_r($input, true));
-    $message = "Invalid input. Please try again.\n";
+    error_log("Invalid input: " . $userData);
+    $message = "❌ Invalid input. Please try again.\n";
+    $message .= "━━━━━━━━━━━━━━━\n";
     $message .= "1. Vote\n";
     $message .= "2. Check Contestants\n";
     $message .= "0. Exit";
