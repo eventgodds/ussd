@@ -6,7 +6,6 @@ $firebaseApiKey = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
 function firestoreRequest($method, $collection, $documentId = null, $data = null) {
     global $firebaseProjectId, $firebaseApiKey;
     
-    // Firestore REST API endpoint
     $baseUrl = "https://firestore.googleapis.com/v1/projects/{$firebaseProjectId}/databases/(default)/documents";
     
     if ($documentId) {
