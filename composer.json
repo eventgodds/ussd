@@ -2,6 +2,6 @@
     "name": "ghartey/ussd-voting",
     "description": "USSD Voting System with Firebase and Paystack",
     "require": {
-        "php": ">=7.4"
+        "php": ">=8.4"
     }
 }
