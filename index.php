@@ -10,7 +10,6 @@ $json = file_get_contents('php://input');
 if (empty($json)) {
     $json = json_encode($_REQUEST);
 }
-
 $data = json_decode($json, true);
 
 if (!$data) {
