@@ -1,172 +1,212 @@
 <?php
 
-// Firebase Configuration
-define('FIREBASE_PROJECT_ID', 'eventgodds-41e4f');
-define('FIREBASE_API_KEY', 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk');
+// Firebase Firestore Configuration
+$firebaseConfig = [
+    'apiKey' => 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk',
+    'authDomain' => 'eventgodds-41e4f.firebaseapp.com',
+    'projectId' => 'eventgodds-41e4f',
+    'databaseURL' => 'https://eventgodds-41e4f-default-rtdb.firebaseio.com',
+];
 
-/**
- * Make HTTP request to Firestore REST API
- */
-function firestoreRequest($method, $path, $data = null) {
-    $url = "https://firestore.googleapis.com/v1/projects/" . FIREBASE_PROJECT_ID . "/databases/(default)/documents/" . $path . "?key=" . FIREBASE_API_KEY;
+// Function to get Firestore access token
+function getFirestoreAccessToken() {
+    $url = 'https://firebase.googleapis.com/v1beta1/projects/eventgodds-41e4f/defaultLocation:initialize';
+    
+    // Using OAuth2 for Firebase
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, 'https://www.googleapis.com/oauth2/v1/certs');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $response = curl_exec($ch);
+    curl_close($ch);
+    
+    // For simplicity, we'll use the REST API with the API key
+    return $GLOBALS['firebaseConfig']['apiKey'];
+}
+
+// Function to get documents from Firestore collection
+function getFirestoreCollection($collectionName) {
+    $projectId = 'eventgodds-41e4f';
+    $apiKey = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
+    
+    // Firestore REST API URL
+    $url = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents/{$collectionName}?key={$apiKey}";
     
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
-    
-    if ($data) {
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    }
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
     
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
-    if ($httpCode >= 200 && $httpCode < 300) {
-        return json_decode($response, true);
-    }
-    
-    error_log("Firestore Error: HTTP $httpCode - $response");
-    return null;
-}
-
-/**
- * Get all contestants from Firestore
- */
-function getAllContestants() {
-    $result = firestoreRequest('GET', 'contestants');
-    
-    if (!$result || !isset($result['documents'])) {
-        error_log("No documents found in contestants collection");
-        return [];
-    }
-    
-    $contestants = [];
-    foreach ($result['documents'] as $doc) {
-        $contestant = [];
-        $fields = $doc['fields'];
+    if ($httpCode == 200) {
+        $data = json_decode($response, true);
+        $documents = [];
         
-        // Parse all fields
-        foreach ($fields as $key => $value) {
-            if (isset($value['stringValue'])) {
-                $contestant[$key] = $value['stringValue'];
-            } elseif (isset($value['integerValue'])) {
-                $contestant[$key] = intval($value['integerValue']);
-            } elseif (isset($value['doubleValue'])) {
-                $contestant[$key] = floatval($value['doubleValue']);
-            } elseif (isset($value['booleanValue'])) {
-                $contestant[$key] = $value['booleanValue'] === 'true';
+        if (isset($data['documents'])) {
+            foreach ($data['documents'] as $doc) {
+                $fields = $doc['fields'];
+                $document = [];
+                
+                // Parse Firestore fields
+                foreach ($fields as $key => $value) {
+                    if (isset($value['stringValue'])) {
+                        $document[$key] = $value['stringValue'];
+                    } elseif (isset($value['integerValue'])) {
+                        $document[$key] = $value['integerValue'];
+                    } elseif (isset($value['booleanValue'])) {
+                        $document[$key] = $value['booleanValue'];
+                    }
+                }
+                
+                $document['id'] = basename($doc['name']);
+                $documents[] = $document;
             }
         }
         
-        $contestant['document_id'] = basename($doc['name']);
-        $contestants[] = $contestant;
+        return $documents;
     }
     
-    error_log("Found " . count($contestants) . " contestants");
-    return $contestants;
+    return null;
 }
 
-/**
- * Get contestant by code field
- */
-function getContestantByCode($code) {
-    // Get all contestants and search
-    $allContestants = getAllContestants();
+// Function to find contestant by code
+function findContestantByCode($contestantCode) {
+    $projectId = 'eventgodds-41e4f';
+    $apiKey = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
     
-    foreach ($allContestants as $contestant) {
-        if (isset($contestant['code']) && strtoupper(trim($contestant['code'])) == strtoupper(trim($code))) {
-            error_log("Found contestant: " . ($contestant['stageName'] ?? $contestant['name']));
+    // Query Firestore for contestant with matching code
+    $url = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents:runQuery?key={$apiKey}";
+    
+    $query = [
+        'structuredQuery' => [
+            'from' => [
+                ['collectionId' => 'contestants']
+            ],
+            'where' => [
+                'fieldFilter' => [
+                    'field' => ['fieldPath' => 'code'],
+                    'op' => 'EQUAL',
+                    'value' => ['stringValue' => $contestantCode]
+                ]
+            ]
+        ]
+    ];
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($query));
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode == 200) {
+        $data = json_decode($response, true);
+        
+        if (isset($data[0]['document'])) {
+            $fields = $data[0]['document']['fields'];
+            $contestant = [];
+            
+            foreach ($fields as $key => $value) {
+                if (isset($value['stringValue'])) {
+                    $contestant[$key] = $value['stringValue'];
+                } elseif (isset($value['integerValue'])) {
+                    $contestant[$key] = $value['integerValue'];
+                }
+            }
+            
             return $contestant;
         }
     }
     
-    error_log("No contestant found with code: " . $code);
+    // If code field doesn't work, try fetching all and matching
+    $allContestants = getFirestoreCollection("contestants");
+    if ($allContestants) {
+        foreach ($allContestants as $contestant) {
+            if ((isset($contestant['code']) && $contestant['code'] == $contestantCode) ||
+                (isset($contestant['contestant_code']) && $contestant['contestant_code'] == $contestantCode)) {
+                return $contestant;
+            }
+        }
+    }
+    
     return null;
 }
 
-/**
- * Update contestant votes
- */
-function updateContestantVotes($code, $newVotes) {
-    // Find the document ID first
-    $allContestants = getAllContestants();
-    $documentId = null;
+// Function to add document to Firestore collection
+function addDocumentToCollection($collectionName, $data) {
+    $projectId = 'eventgodds-41e4f';
+    $apiKey = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
     
-    foreach ($allContestants as $contestant) {
-        if (isset($contestant['code']) && $contestant['code'] == $code) {
-            $documentId = $contestant['document_id'];
-            break;
-        }
-    }
+    $url = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents/{$collectionName}?key={$apiKey}&documentId=" . uniqid();
     
-    if (!$documentId) {
-        error_log("Cannot find document ID for code: $code");
-        return false;
-    }
-    
-    // Update only the votes field
-    $updateData = [
-        'fields' => [
-            'votes' => ['integerValue' => $newVotes]
-        ]
-    ];
-    
-    $result = firestoreRequest('PATCH', "contestants/$documentId", $updateData);
-    
-    if ($result) {
-        error_log("Successfully updated votes for $code to $newVotes");
-        return true;
-    }
-    
-    error_log("Failed to update votes for $code");
-    return false;
-}
-
-/**
- * Save vote record
- */
-function saveVoteRecord($voteData) {
+    // Convert data to Firestore format
     $firestoreData = ['fields' => []];
+    foreach ($data as $key => $value) {
+        $firestoreData['fields'][$key] = ['stringValue' => (string)$value];
+    }
     
-    foreach ($voteData as $key => $value) {
-        if (is_int($value)) {
-            $firestoreData['fields'][$key] = ['integerValue' => $value];
-        } else {
-            $firestoreData['fields'][$key] = ['stringValue' => (string)$value];
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($firestoreData));
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    return $httpCode == 200;
+}
+
+// Function to get single document from Firestore
+function getFirestoreDocument($collectionName, $documentId) {
+    $projectId = 'eventgodds-41e4f';
+    $apiKey = 'AIzaSyD9OEg_1P6b6G1pJUCWofOBXF6l25kpoRk';
+    
+    $url = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents/{$collectionName}/{$documentId}?key={$apiKey}";
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($httpCode == 200) {
+        $data = json_decode($response, true);
+        $fields = $data['fields'];
+        $document = [];
+        
+        foreach ($fields as $key => $value) {
+            if (isset($value['stringValue'])) {
+                $document[$key] = $value['stringValue'];
+            } elseif (isset($value['integerValue'])) {
+                $document[$key] = $value['integerValue'];
+            }
         }
+        
+        $document['id'] = $documentId;
+        return $document;
     }
     
-    $voteId = 'vote_' . uniqid() . '_' . time();
-    $result = firestoreRequest('POST', "vote_history?documentId=" . $voteId, $firestoreData);
-    
-    if ($result) {
-        error_log("Vote record saved with ID: $voteId");
-        return true;
-    }
-    
-    error_log("Failed to save vote record");
-    return false;
+    return null;
 }
-
-/**
- * Test Firestore connection (for debugging)
- */
-function testFirestoreConnection() {
-    $result = firestoreRequest('GET', 'contestants?pageSize=1');
-    
-    if ($result && isset($result['documents'])) {
-        error_log("Firestore connection successful");
-        return true;
-    }
-    
-    error_log("Firestore connection failed");
-    return false;
-}
-
-// Run connection test on load
-testFirestoreConnection();
 ?>
