@@ -16,7 +16,7 @@ function firestoreRequest($method, $path, $data = null) {
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     
-    if ($data !== null) {
+    if ($data) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     }
@@ -29,7 +29,7 @@ function firestoreRequest($method, $path, $data = null) {
         return json_decode($response, true);
     }
     
-    error_log("Firestore Error: HTTP $httpCode - " . substr($response, 0, 500));
+    error_log("Firestore Error: HTTP $httpCode - $response");
     return null;
 }
 
@@ -49,7 +49,7 @@ function getAllContestants() {
         $contestant = [];
         $fields = $doc['fields'];
         
-        // Parse all fields from Firestore
+        // Parse all fields
         foreach ($fields as $key => $value) {
             if (isset($value['stringValue'])) {
                 $contestant[$key] = $value['stringValue'];
@@ -62,7 +62,6 @@ function getAllContestants() {
             }
         }
         
-        // Get document ID
         $contestant['document_id'] = basename($doc['name']);
         $contestants[] = $contestant;
     }
@@ -72,29 +71,16 @@ function getAllContestants() {
 }
 
 /**
- * Get contestant by code field (case insensitive)
+ * Get contestant by code field
  */
 function getContestantByCode($code) {
-    error_log("Searching for contestant with code: " . $code);
-    
-    // Get all contestants
+    // Get all contestants and search
     $allContestants = getAllContestants();
     
-    if (empty($allContestants)) {
-        error_log("No contestants found in database");
-        return null;
-    }
-    
-    // Search for matching code
     foreach ($allContestants as $contestant) {
-        if (isset($contestant['code'])) {
-            $contestantCode = strtoupper(trim($contestant['code']));
-            $searchCode = strtoupper(trim($code));
-            
-            if ($contestantCode === $searchCode) {
-                error_log("Found contestant: " . ($contestant['stageName'] ?? $contestant['name']));
-                return $contestant;
-            }
+        if (isset($contestant['code']) && strtoupper(trim($contestant['code'])) == strtoupper(trim($code))) {
+            error_log("Found contestant: " . ($contestant['stageName'] ?? $contestant['name']));
+            return $contestant;
         }
     }
     
@@ -106,14 +92,12 @@ function getContestantByCode($code) {
  * Update contestant votes
  */
 function updateContestantVotes($code, $newVotes) {
-    error_log("Updating votes for code: $code to $newVotes");
-    
     // Find the document ID first
     $allContestants = getAllContestants();
     $documentId = null;
     
     foreach ($allContestants as $contestant) {
-        if (isset($contestant['code']) && strtoupper($contestant['code']) === strtoupper($code)) {
+        if (isset($contestant['code']) && $contestant['code'] == $code) {
             $documentId = $contestant['document_id'];
             break;
         }
@@ -124,7 +108,7 @@ function updateContestantVotes($code, $newVotes) {
         return false;
     }
     
-    // Update only the votes field using PATCH
+    // Update only the votes field
     $updateData = [
         'fields' => [
             'votes' => ['integerValue' => $newVotes]
@@ -133,8 +117,8 @@ function updateContestantVotes($code, $newVotes) {
     
     $result = firestoreRequest('PATCH', "contestants/$documentId", $updateData);
     
-    if ($result !== null) {
-        error_log("Successfully updated votes for $code");
+    if ($result) {
+        error_log("Successfully updated votes for $code to $newVotes");
         return true;
     }
     
@@ -143,16 +127,14 @@ function updateContestantVotes($code, $newVotes) {
 }
 
 /**
- * Save vote history
+ * Save vote record
  */
-function saveVoteHistory($voteData) {
+function saveVoteRecord($voteData) {
     $firestoreData = ['fields' => []];
     
     foreach ($voteData as $key => $value) {
         if (is_int($value)) {
             $firestoreData['fields'][$key] = ['integerValue' => $value];
-        } elseif (is_bool($value)) {
-            $firestoreData['fields'][$key] = ['booleanValue' => $value];
         } else {
             $firestoreData['fields'][$key] = ['stringValue' => (string)$value];
         }
@@ -161,37 +143,30 @@ function saveVoteHistory($voteData) {
     $voteId = 'vote_' . uniqid() . '_' . time();
     $result = firestoreRequest('POST', "vote_history?documentId=" . $voteId, $firestoreData);
     
-    if ($result !== null) {
-        error_log("Vote history saved with ID: $voteId");
+    if ($result) {
+        error_log("Vote record saved with ID: $voteId");
         return true;
     }
     
-    error_log("Failed to save vote history");
+    error_log("Failed to save vote record");
     return false;
 }
 
 /**
- * Test Firestore connection and data
+ * Test Firestore connection (for debugging)
  */
 function testFirestoreConnection() {
-    error_log("Testing Firestore connection...");
+    $result = firestoreRequest('GET', 'contestants?pageSize=1');
     
-    // Test getting contestants
-    $contestants = getAllContestants();
-    
-    if (!empty($contestants)) {
-        error_log("SUCCESS: Found " . count($contestants) . " contestants");
-        foreach ($contestants as $c) {
-            error_log("Contestant: " . ($c['stageName'] ?? 'No name') . " - Code: " . ($c['code'] ?? 'No code'));
-        }
+    if ($result && isset($result['documents'])) {
+        error_log("Firestore connection successful");
         return true;
     }
     
-    error_log("FAILED: No contestants found or connection error");
+    error_log("Firestore connection failed");
     return false;
 }
 
-// Run test on script load
+// Run connection test on load
 testFirestoreConnection();
-
 ?>
