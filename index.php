@@ -3,228 +3,207 @@ ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
 require 'firebase.php';
-require 'paystack.php';
-
-/*
-|--------------------------------------------------------------------------
-| GET REQUEST
-|--------------------------------------------------------------------------
-*/
 
 $json = file_get_contents('php://input');
+
+if (empty($json)) {
+    $json = json_encode($_REQUEST);
+}
+
 $data = json_decode($json, true);
 
-$sessionID = $data['sessionID'] ?? '';
-$userID = $data['userID'] ?? '';
-$msisdn = $data['msisdn'] ?? '';
-$newSession = $data['newSession'] ?? false;
-$userData = trim($data['userData'] ?? '');
+if (!$data) {
+    $data = $_POST;
+}
 
-/*
-|--------------------------------------------------------------------------
-| RESPONSE VARIABLES
-|--------------------------------------------------------------------------
-*/
+$sessionID = $data['sessionID'] ?? $data['sessionId'] ?? '';
+$userID = $data['userID'] ?? $data['userId'] ?? '';
+$msisdn = $data['msisdn'] ?? $data['phoneNumber'] ?? '';
+$newSession = $data['newSession'] ?? $data['new_session'] ?? false;
+$userData = trim($data['userData'] ?? $data['text'] ?? '');
+
+if (is_string($newSession)) {
+    $newSession = strtolower($newSession) === 'true';
+}
 
 $message = "";
 $continueSession = true;
-
-/*
-|--------------------------------------------------------------------------
-| SPLIT USER INPUT
-|--------------------------------------------------------------------------
-*/
-
 $input = explode('*', $userData);
 
-/*
-|--------------------------------------------------------------------------
-| MAIN MENU
-|--------------------------------------------------------------------------
-*/
+// Get user session from Firestore
+$userSession = getSession($msisdn);
+if (!$userSession || empty($userSession)) {
+    $userSession = ['step' => 'menu'];
+    saveSession($msisdn, $userSession);
+}
 
-if ($newSession == true) {
-    $message = "Welcome to Ghartey Event Voting System\n";
+// MAIN MENU
+if ($newSession == true || empty($userData)) {
+    $message = "Welcome to Ghartey Event\n";
     $message .= "1. Vote\n";
-    $message .= "2. Check Contestants\n";
-    $message .= "3. My Voting History\n";
-    $message .= "4. Support";
+    $message .= "2. View Results\n";
+    $message .= "3. Help\n";
+    $message .= "Enter choice:";
+    saveSession($msisdn, ['step' => 'menu']);
 }
 
-/*
-|--------------------------------------------------------------------------
-| STEP 1 - CHECK CONTESTANTS
-|--------------------------------------------------------------------------
-*/
-elseif (count($input) == 1 && $input[0] == "2") {
-    $contestants = firebaseRequest("GET", "contestants");
+// HANDLE MENU SELECTIONS
+elseif ($userSession['step'] == 'menu') {
     
-    if ($contestants) {
-        $message = "Available Contestants:\n";
-        $counter = 1;
-        foreach ($contestants as $code => $contestant) {
-            $message .= $counter . ". " . $contestant['contestant_name'] . " (Code: " . $code . ")\n";
-            $counter++;
-            if ($counter > 5) break; // Limit to 5 for USSD
-        }
-        $message .= "\n0. Back to Main Menu";
-    } else {
-        $message = "No contestants available\n0. Back to Main Menu";
+    if ($userData == "1") {
+        $message = "Enter contestant code (FS1, FS2, FS3, FS4, or FS5):";
+        saveSession($msisdn, ['step' => 'enter_code']);
     }
-    $continueSession = true;
-}
-
-/*
-|--------------------------------------------------------------------------
-| STEP 1 - USER SELECTS VOTE
-|--------------------------------------------------------------------------
-*/
-elseif (count($input) == 1 && $input[0] == "1") {
-    $message = "Enter contestant code (e.g., FS1, FS2, etc.)";
-}
-
-/*
-|--------------------------------------------------------------------------
-| STEP 2 - PROCESS VOTE WITH PAYMENT
-|--------------------------------------------------------------------------
-*/
-elseif (count($input) == 2 && $input[0] == "1") {
-    $contestantCode = strtoupper($input[1]);
     
-    // Store in session
-    $_SESSION['contestant_code'] = $contestantCode;
-    
-    $contestant = firebaseRequest("GET", "contestants/" . $contestantCode);
-    
-    if ($contestant) {
-        $message = "Confirm Vote:\n";
-        $message .= "Contestant: " . $contestant['contestant_name'] . "\n";
-        $message .= "Code: " . $contestantCode . "\n";
-        $message .= "Amount: ₵10 per vote\n";
-        $message .= "1. Confirm Vote\n";
-        $message .= "2. Cancel";
-    } else {
-        $message = "Contestant not found. Please enter valid code.\n0. Back to Main Menu";
-    }
-}
-
-/*
-|--------------------------------------------------------------------------
-| STEP 3 - PROCESS PAYMENT
-|--------------------------------------------------------------------------
-*/
-elseif (count($input) == 3 && $input[0] == "1" && $input[2] == "1") {
-    $contestantCode = $_SESSION['contestant_code'] ?? $input[1];
-    $contestant = firebaseRequest("GET", "contestants/" . $contestantCode);
-    
-    if ($contestant) {
-        // Process payment
-        $paymentAmount = 10000; // ₵10 in kobo
-        $paymentReference = uniqid('VOTE_');
-        
-        $paymentResult = processPaystackPayment($msisdn, $paymentAmount, $paymentReference);
-        
-        if ($paymentResult && $paymentResult['status']) {
-            // Record vote in Firebase
-            $voteData = [
-                'userID' => $userID,
-                'msisdn' => $msisdn,
-                'contestant_code' => $contestantCode,
-                'contestant_name' => $contestant['contestant_name'],
-                'timestamp' => date('Y-m-d H:i:s'),
-                'amount' => 10,
-                'reference' => $paymentReference,
-                'status' => 'completed'
-            ];
-            
-            $voteResult = firebaseRequest("POST", "votes/" . $paymentReference, $voteData);
-            
-            // Update contestant vote count
-            $currentVotes = $contestant['votes'] ?? 0;
-            firebaseRequest("PATCH", "contestants/" . $contestantCode, [
-                'votes' => $currentVotes + 1
-            ]);
-            
-            $message = "✓ Vote successful!\n";
-            $message .= "You voted for: " . $contestant['contestant_name'] . "\n";
-            $message .= "Thank you for participating!\n";
-            $message .= "0. Back to Main Menu";
-        } else {
-            $message = "Payment failed. Please try again.\n0. Back to Main Menu";
-        }
-    } else {
-        $message = "Invalid contestant. Please try again.\n0. Back to Main Menu";
-    }
-}
-
-/*
-|--------------------------------------------------------------------------
-| STEP 3 - VOTING HISTORY
-|--------------------------------------------------------------------------
-*/
-elseif (count($input) == 1 && $input[0] == "3") {
-    $votes = firebaseRequest("GET", "votes");
-    $userVotes = [];
-    
-    if ($votes) {
-        foreach ($votes as $vote) {
-            if ($vote['msisdn'] == $msisdn) {
-                $userVotes[] = $vote;
+    elseif ($userData == "2") {
+        $contestants = getContestants();
+        if ($contestants && !empty($contestants)) {
+            $message = "Current Results:\n";
+            foreach ($contestants as $code => $contestant) {
+                $votes = isset($contestant['votes']) ? $contestant['votes'] : 0;
+                $message .= $code . " - " . $contestant['contestant_name'] . ": " . $votes . " votes\n";
             }
+            $message .= "\nSend 0 for main menu";
+            $continueSession = true;
+            saveSession($msisdn, ['step' => 'menu']);
+        } else {
+            $message = "No results available. Send 0 for main menu";
+            $continueSession = true;
         }
     }
     
-    if (count($userVotes) > 0) {
-        $message = "Your Voting History:\n";
-        foreach ($userVotes as $index => $vote) {
-            $message .= ($index + 1) . ". " . $vote['contestant_name'] . " - ₵" . $vote['amount'] . "\n";
-            $message .= "   " . date('d/m/Y H:i', strtotime($vote['timestamp'])) . "\n";
-            if ($index >= 4) break;
-        }
-        $message .= "\n0. Back to Main Menu";
-    } else {
-        $message = "You haven't voted yet\n0. Back to Main Menu";
+    elseif ($userData == "3") {
+        $message = "Help:\n";
+        $message .= "1. Vote - Enter contestant code (FS1-FS5)\n";
+        $message .= "2. View Results - See current standings\n";
+        $message .= "Send 0 for main menu";
+        $continueSession = true;
+        saveSession($msisdn, ['step' => 'menu']);
+    }
+    
+    elseif ($userData == "0") {
+        $message = "Welcome to Ghartey Event\n";
+        $message .= "1. Vote\n";
+        $message .= "2. View Results\n";
+        $message .= "3. Help\n";
+        $message .= "Enter choice:";
+        $continueSession = true;
+        saveSession($msisdn, ['step' => 'menu']);
+    }
+    
+    else {
+        $message = "Invalid option. Select 1, 2, or 3\n";
+        $message .= "Send 0 for main menu";
+        $continueSession = true;
     }
 }
 
-/*
-|--------------------------------------------------------------------------
-| BACK TO MAIN MENU
-|--------------------------------------------------------------------------
-*/
-elseif (count($input) == 1 && $input[0] == "0") {
-    $message = "Main Menu\n";
-    $message .= "1. Vote (₵10 per vote)\n";
-    $message .= "2. Check Contestants\n";
-    $message .= "3. My Voting History\n";
-    $message .= "4. Support";
+// ENTER CONTESTANT CODE - FETCH FROM FIRESTORE
+elseif ($userSession['step'] == 'enter_code') {
+    
+    $contestantCode = strtoupper($userData);
+    
+    // Fetch contestant from Firestore database
+    $contestant = getContestant($contestantCode);
+    
+    if ($contestant && isset($contestant['contestant_name'])) {
+        $currentVotes = isset($contestant['votes']) ? $contestant['votes'] : 0;
+        
+        $message = "Contestant found:\n";
+        $message .= "Name: " . $contestant['contestant_name'] . "\n";
+        $message .= "Code: " . $contestantCode . "\n";
+        $message .= "Current votes: " . $currentVotes . "\n";
+        $message .= "Enter number of votes to add (1-100):";
+        
+        saveSession($msisdn, [
+            'step' => 'enter_votes',
+            'selected_code' => $contestantCode,
+            'selected_name' => $contestant['contestant_name'],
+            'current_votes' => $currentVotes
+        ]);
+    } else {
+        $message = "Contestant code '" . $contestantCode . "' not found in database.\n";
+        $message .= "Valid codes: FS1, FS2, FS3, FS4, FS5\n";
+        $message .= "Enter contestant code or 0 for menu:";
+        saveSession($msisdn, ['step' => 'enter_code']);
+    }
 }
 
-/*
-|--------------------------------------------------------------------------
-| INVALID INPUT
-|--------------------------------------------------------------------------
-*/
+// ENTER NUMBER OF VOTES - UPDATE FIRESTORE
+elseif ($userSession['step'] == 'enter_votes') {
+    
+    $numberOfVotes = intval($userData);
+    
+    if ($numberOfVotes > 0 && $numberOfVotes <= 100) {
+        
+        $contestantCode = $userSession['selected_code'];
+        
+        // Get current contestant data from Firestore
+        $contestant = getContestant($contestantCode);
+        
+        if ($contestant) {
+            $currentVotes = isset($contestant['votes']) ? intval($contestant['votes']) : 0;
+            $newTotalVotes = $currentVotes + $numberOfVotes;
+            
+            // Update votes in Firestore
+            $updateResult = updateContestantVotes($contestantCode, $newTotalVotes);
+            
+            // Record transaction
+            $transaction = [
+                "msisdn" => $msisdn,
+                "contestant_code" => $contestantCode,
+                "contestant_name" => $contestant['contestant_name'],
+                "votes_added" => $numberOfVotes,
+                "previous_total" => $currentVotes,
+                "new_total" => $newTotalVotes,
+                "timestamp" => time(),
+                "date" => date('Y-m-d H:i:s')
+            ];
+            saveTransaction($transaction);
+            
+            $message = "VOTE SUCCESSFUL!\n";
+            $message .= "Added " . $numberOfVotes . " vote(s) to " . $contestant['contestant_name'] . "\n";
+            $message .= "Previous votes: " . $currentVotes . "\n";
+            $message .= "Total votes now: " . $newTotalVotes . "\n";
+            $message .= "Thank you for voting!";
+            $continueSession = false;
+            
+            deleteSession($msisdn);
+        } else {
+            $message = "Error: Contestant not found in database.\n";
+            $message .= "Please try again.";
+            $continueSession = false;
+        }
+    } else {
+        $message = "Invalid number. Enter 1-100 votes:\n";
+        $message .= "Or 0 to cancel:";
+        $continueSession = true;
+    }
+}
+
+// HANDLE CANCEL
+elseif ($userData == "0") {
+    $message = "Welcome to Ghartey Event\n";
+    $message .= "1. Vote\n";
+    $message .= "2. View Results\n";
+    $message .= "3. Help\n";
+    $message .= "Enter choice:";
+    $continueSession = true;
+    saveSession($msisdn, ['step' => 'menu']);
+}
+
+// INVALID INPUT
 else {
-    $message = "Invalid input. Please try again.\n0. Back to Main Menu";
+    $message = "Invalid input. Send 0 for main menu";
     $continueSession = true;
 }
 
-/*
-|--------------------------------------------------------------------------
-| FINAL RESPONSE
-|--------------------------------------------------------------------------
-*/
-
-$response = [
-    "sessionID" => $sessionID,
-    "userID" => $userID,
-    "msisdn" => $msisdn,
+// RESPONSE FOR ARKESEL
+$arkeselResponse = [
     "message" => $message,
-    "continueSession" => $continueSession
+    "continueSession" => $continueSession ? "True" : "False"
 ];
 
-session_write_close();
 header('Content-Type: application/json');
-echo json_encode($response);
+echo json_encode($arkeselResponse);
 ?>
