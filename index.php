@@ -2,25 +2,61 @@
 
 /*
 |--------------------------------------------------------------------------
-| USSD VOTING SYSTEM - GHARTEY EVENTS
-|--------------------------------------------------------------------------
-| COMPLETE FIXED VERSION
+| GHARTEY EVENTS USSD VOTING SYSTEM (FIRESTORE)
 |--------------------------------------------------------------------------
 */
 
-ini_set('display_errors', 0);
+ini_set('display_errors', 1);
 error_reporting(E_ALL);
-
-require 'firebase.php';
 
 /*
 |--------------------------------------------------------------------------
-| GET JSON REQUEST
+| FIREBASE REQUEST FUNCTION
 |--------------------------------------------------------------------------
 */
 
-$json = file_get_contents('php://input');
+function firebaseRequest($method, $collection, $docId, $data = null)
+{
+    $baseURL = "https://firestore.googleapis.com/v1/projects/eventgodds/databases/(default)/documents";
 
+    $url = $baseURL . "/" . $collection . "/" . $docId;
+
+    // Update only votes field
+    if ($method == "PATCH") {
+        $url .= "?updateMask.fieldPaths=votes";
+    }
+
+    $ch = curl_init($url);
+
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+
+    if ($data !== null) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    }
+
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Content-Type: application/json"
+    ]);
+
+    $response = curl_exec($ch);
+
+    if (curl_errno($ch)) {
+        return null;
+    }
+
+    curl_close($ch);
+
+    return json_decode($response, true);
+}
+
+/*
+|--------------------------------------------------------------------------
+| GET JSON INPUT
+|--------------------------------------------------------------------------
+*/
+
+$json = file_get_contents("php://input");
 $data = json_decode($json, true);
 
 /*
@@ -29,15 +65,15 @@ $data = json_decode($json, true);
 |--------------------------------------------------------------------------
 */
 
-$sessionID   = $data['sessionID'] ?? '';
-$userID      = $data['userID'] ?? '';
-$msisdn      = $data['msisdn'] ?? '';
-$newSession  = $data['newSession'] ?? false;
-$userData    = trim($data['userData'] ?? '');
+$sessionID  = $data['sessionID'] ?? '';
+$userID     = $data['userID'] ?? '';
+$msisdn     = $data['msisdn'] ?? '';
+$newSession = $data['newSession'] ?? false;
+$userData   = trim($data['userData'] ?? '');
 
 /*
 |--------------------------------------------------------------------------
-| RESPONSE VARIABLES
+| DEFAULT RESPONSE
 |--------------------------------------------------------------------------
 */
 
@@ -50,7 +86,7 @@ $continueSession = true;
 |--------------------------------------------------------------------------
 */
 
-$input = explode('*', $userData);
+$input = explode("*", $userData);
 
 /*
 |--------------------------------------------------------------------------
@@ -60,7 +96,7 @@ $input = explode('*', $userData);
 
 if ($newSession == true) {
 
-    $message  = "Welcome to Ghartey Event\n";
+    $message  = "Welcome To Ghartey Eventsssss\n";
     $message .= "1. Vote";
 
     $continueSession = true;
@@ -68,20 +104,20 @@ if ($newSession == true) {
 
 /*
 |--------------------------------------------------------------------------
-| STEP 1 - SELECT VOTE
+| STEP 1 - ENTER CONTESTANT CODE
 |--------------------------------------------------------------------------
 */
 
 elseif (count($input) == 1 && $input[0] == "1") {
 
-    $message = "Enter contestant code";
+    $message = "Enter Contestant Code";
 
     $continueSession = true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| STEP 2 - SHOW CONTESTANT DETAILS
+| STEP 2 - FETCH CONTESTANT
 |--------------------------------------------------------------------------
 */
 
@@ -89,24 +125,43 @@ elseif (count($input) == 2 && $input[0] == "1") {
 
     $contestantCode = strtoupper(trim($input[1]));
 
+    /*
+    |--------------------------------------------------------------------------
+    | IMPORTANT
+    |--------------------------------------------------------------------------
+    | Your document ID in Firebase MUST match the contestant code
+    |
+    | Example:
+    |
+    | awards_nominees
+    |    └── RE_PG
+    |
+    */
+
     $contestant = firebaseRequest(
         "GET",
-        "contestants/" . $contestantCode
+        "awards_nominees",
+        $contestantCode
     );
 
-    if ($contestant && isset($contestant['contestant_name'])) {
+    if (
+        isset($contestant['fields']['fullName']['stringValue'])
+    ) {
+
+        $contestantName =
+            $contestant['fields']['fullName']['stringValue'];
 
         $message  = "Vote For:\n";
-        $message .= $contestant['contestant_name'] . "\n";
-        $message .= "Code: " . $contestantCode . "\n";
-        $message .= "1. Confirm Vote\n";
+        $message .= $contestantName . "\n";
+        $message .= "Code: " . $contestantCode . "\n\n";
+        $message .= "1. Confirm\n";
         $message .= "2. Cancel";
 
         $continueSession = true;
 
     } else {
 
-        $message = "Contestant not found";
+        $message = "Contestant Not Found";
 
         $continueSession = false;
     }
@@ -126,18 +181,18 @@ elseif (
 
     $contestantCode = strtoupper(trim($input[1]));
 
-    /*
-    |--------------------------------------------------------------------------
-    | GET CONTESTANT
-    |--------------------------------------------------------------------------
-    */
-
     $contestant = firebaseRequest(
         "GET",
-        "contestants/" . $contestantCode
+        "awards_nominees",
+        $contestantCode
     );
 
-    if ($contestant) {
+    if (
+        isset($contestant['fields']['fullName']['stringValue'])
+    ) {
+
+        $contestantName =
+            $contestant['fields']['fullName']['stringValue'];
 
         /*
         |--------------------------------------------------------------------------
@@ -145,39 +200,48 @@ elseif (
         |--------------------------------------------------------------------------
         */
 
-        $votes = isset($contestant['votes'])
-            ? (int)$contestant['votes']
-            : 0;
+        $votes = 0;
+
+        if (isset($contestant['fields']['votes']['integerValue'])) {
+
+            $votes = (int)
+                $contestant['fields']['votes']['integerValue'];
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | INCREMENT VOTES
+        |--------------------------------------------------------------------------
+        */
 
         $newVotes = $votes + 1;
 
         /*
         |--------------------------------------------------------------------------
-        | UPDATE VOTES
+        | UPDATE FIRESTORE
         |--------------------------------------------------------------------------
         */
 
         firebaseRequest(
             "PATCH",
-            "contestants/" . $contestantCode,
+            "awards_nominees",
+            $contestantCode,
             [
-                "votes" => $newVotes
+                "fields" => [
+                    "votes" => [
+                        "integerValue" => strval($newVotes)
+                    ]
+                ]
             ]
         );
 
-        /*
-        |--------------------------------------------------------------------------
-        | SUCCESS MESSAGE
-        |--------------------------------------------------------------------------
-        */
-
-        $message  = "Vote Successful!\n";
-        $message .= $contestant['contestant_name'] . "\n";
+        $message  = "Vote Successful\n";
+        $message .= $contestantName . "\n";
         $message .= "Total Votes: " . $newVotes;
 
     } else {
 
-        $message = "Vote failed";
+        $message = "Vote Failed";
     }
 
     $continueSession = false;
@@ -185,7 +249,7 @@ elseif (
 
 /*
 |--------------------------------------------------------------------------
-| STEP 3 - CANCEL VOTE
+| CANCEL VOTE
 |--------------------------------------------------------------------------
 */
 
@@ -208,7 +272,7 @@ elseif (
 
 else {
 
-    $message = "Invalid input";
+    $message = "Invalid Input";
 
     $continueSession = false;
 }
@@ -233,7 +297,7 @@ $response = [
 |--------------------------------------------------------------------------
 */
 
-header('Content-Type: application/json');
+header("Content-Type: application/json");
 
 echo json_encode($response);
 
