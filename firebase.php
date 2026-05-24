@@ -2,7 +2,7 @@
 
 function firebaseRequest($method, $path, $data = null)
 {
-    $firebaseURL = "https://eventgodds-default-rtdb.firestore.googleapis.com/contestants";
+    $firebaseURL = "https://firestore.googleapis.com/v1/projects/eventgodds/databases/(default)/documents";
 
     $url = $firebaseURL . $path . ".json";
 
