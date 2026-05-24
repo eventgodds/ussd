@@ -1,10 +1,12 @@
-<?php
-
-function firebaseRequest($method, $path, $data = null)
+function firebaseRequest($method, $collection, $docId, $data = null)
 {
-    $firebaseURL = "https://eventgodds-41e4f-default-rtdb.firebaseio.com";
+    $baseURL = "https://firestore.googleapis.com/v1/projects/eventgodds-41e4f/databases/(default)/documents";
 
-    $url = $firebaseURL . $path . ".json";
+    $url = $baseURL . "/" . $collection . "/" . $docId;
+
+    if ($method == "PATCH") {
+        $url .= "?updateMask.fieldPaths=votes";
+    }
 
     $ch = curl_init($url);
 
@@ -12,16 +14,11 @@ function firebaseRequest($method, $path, $data = null)
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
 
     if ($data !== null) {
-
-        curl_setopt(
-            $ch,
-            CURLOPT_POSTFIELDS,
-            json_encode($data)
-        );
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
     }
 
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json'
+        "Content-Type: application/json"
     ]);
 
     $response = curl_exec($ch);
@@ -30,4 +27,3 @@ function firebaseRequest($method, $path, $data = null)
 
     return json_decode($response, true);
 }
-?>
