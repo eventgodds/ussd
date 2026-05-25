@@ -1,221 +1,157 @@
 <?php
 
-/*
-|--------------------------------------------------------------------------
-| USSD VOTING SYSTEM - GHARTEY EVENTS
-|--------------------------------------------------------------------------
-| COMPLETE FIXED VERSION
-|--------------------------------------------------------------------------
-*/
-
-ini_set('display_errors', 0);
+ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
-require 'firebase.php';
-
 /*
 |--------------------------------------------------------------------------
-| GET JSON REQUEST
+| FIREBASE REQUEST
 |--------------------------------------------------------------------------
 */
 
-$json = file_get_contents('php://input');
+function firebaseRequest($method, $collection, $docId, $data = null)
+{
+    $baseURL = "https://firestore.googleapis.com/v1/projects/eventgodds/databases/(default)/documents";
 
+    $url = $baseURL . "/" . $collection . "/" . $docId;
+
+    if ($method == "PATCH") {
+        $url .= "?updateMask.fieldPaths=votes";
+    }
+
+    $ch = curl_init($url);
+
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+
+    if ($data !== null) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    }
+
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Content-Type: application/json"
+    ]);
+
+    $response = curl_exec($ch);
+
+    curl_close($ch);
+
+    return json_decode($response, true);
+}
+
+/*
+|--------------------------------------------------------------------------
+| GET REQUEST
+|--------------------------------------------------------------------------
+*/
+
+$json = file_get_contents("php://input");
 $data = json_decode($json, true);
 
 /*
 |--------------------------------------------------------------------------
-| REQUEST VARIABLES
+| VARIABLES
 |--------------------------------------------------------------------------
 */
 
-$sessionID   = $data['sessionID'] ?? '';
-$userID      = $data['userID'] ?? '';
-$msisdn      = $data['msisdn'] ?? '';
-$newSession  = $data['newSession'] ?? false;
-$userData    = trim($data['userData'] ?? '');
-
-/*
-|--------------------------------------------------------------------------
-| RESPONSE VARIABLES
-|--------------------------------------------------------------------------
-*/
+$sessionID  = $data['sessionID'] ?? '';
+$userID     = $data['userID'] ?? '';
+$msisdn     = $data['msisdn'] ?? '';
+$newSession = $data['newSession'] ?? false;
+$userData   = trim($data['userData'] ?? '');
 
 $message = "";
 $continueSession = true;
 
 /*
 |--------------------------------------------------------------------------
-| SPLIT INPUT
-|--------------------------------------------------------------------------
-*/
-
-$input = explode('*', $userData);
-
-/*
-|--------------------------------------------------------------------------
-| MAIN MENU
+| STEP 0 - NEW SESSION
 |--------------------------------------------------------------------------
 */
 
 if ($newSession == true) {
 
-    $message  = "Welcome to Ghartey Event\n";
+    $message = "Welcome To Ghartey Events\n";
     $message .= "1. Vote";
 
-    $continueSession = true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| STEP 1 - SELECT VOTE
+| STEP 1
 |--------------------------------------------------------------------------
 */
 
-elseif (count($input) == 1 && $input[0] == "1") {
+elseif ($userData == "1") {
 
-    $message = "Enter contestant code";
+    $message = "Enter Contestant Code";
 
-    $continueSession = true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| STEP 2 - SHOW CONTESTANT DETAILS
+| STEP 2
 |--------------------------------------------------------------------------
 */
 
-elseif (count($input) == 2 && $input[0] == "1") {
+elseif (preg_match('/^[A-Z0-9_]+$/', strtoupper($userData))) {
 
-    $contestantCode = strtoupper(trim($input[1]));
+    $contestantCode = strtoupper($userData);
 
     $contestant = firebaseRequest(
         "GET",
-        "contestants/" . $contestantCode
+        "awards_nominees",
+        $contestantCode
     );
 
-    if ($contestant && isset($contestant['contestant_name'])) {
+    if (isset($contestant['fields']['fullName']['stringValue'])) {
+
+        $contestantName =
+            $contestant['fields']['fullName']['stringValue'];
 
         $message  = "Vote For:\n";
-        $message .= $contestant['contestant_name'] . "\n";
+        $message .= $contestantName . "\n";
         $message .= "Code: " . $contestantCode . "\n";
-        $message .= "1. Confirm Vote\n";
+        $message .= "1. Confirm\n";
         $message .= "2. Cancel";
 
-        $continueSession = true;
-
     } else {
 
-        $message = "Contestant not found";
-
+        $message = "Contestant Not Found";
         $continueSession = false;
     }
+
 }
 
 /*
 |--------------------------------------------------------------------------
-| STEP 3 - CONFIRM VOTE
+| STEP 3
 |--------------------------------------------------------------------------
 */
 
-elseif (
-    count($input) == 3 &&
-    $input[0] == "1" &&
-    $input[2] == "1"
-) {
+elseif ($userData == "1") {
 
-    $contestantCode = strtoupper(trim($input[1]));
-
-    /*
-    |--------------------------------------------------------------------------
-    | GET CONTESTANT
-    |--------------------------------------------------------------------------
-    */
-
-    $contestant = firebaseRequest(
-        "GET",
-        "contestants/" . $contestantCode
-    );
-
-    if ($contestant) {
-
-        /*
-        |--------------------------------------------------------------------------
-        | CURRENT VOTES
-        |--------------------------------------------------------------------------
-        */
-
-        $votes = isset($contestant['votes'])
-            ? (int)$contestant['votes']
-            : 0;
-
-        $newVotes = $votes + 1;
-
-        /*
-        |--------------------------------------------------------------------------
-        | UPDATE VOTES
-        |--------------------------------------------------------------------------
-        */
-
-        firebaseRequest(
-            "PATCH",
-            "contestants/" . $contestantCode,
-            [
-                "votes" => $newVotes
-            ]
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | SUCCESS MESSAGE
-        |--------------------------------------------------------------------------
-        */
-
-        $message  = "Vote Successful!\n";
-        $message .= $contestant['contestant_name'] . "\n";
-        $message .= "Total Votes: " . $newVotes;
-
-    } else {
-
-        $message = "Vote failed";
-    }
-
+    $message = "Vote Successful";
     $continueSession = false;
+
 }
 
 /*
 |--------------------------------------------------------------------------
-| STEP 3 - CANCEL VOTE
-|--------------------------------------------------------------------------
-*/
-
-elseif (
-    count($input) == 3 &&
-    $input[0] == "1" &&
-    $input[2] == "2"
-) {
-
-    $message = "Vote Cancelled";
-
-    $continueSession = false;
-}
-
-/*
-|--------------------------------------------------------------------------
-| INVALID INPUT
+| INVALID
 |--------------------------------------------------------------------------
 */
 
 else {
 
-    $message = "Invalid input";
-
+    $message = "Invalid Input";
     $continueSession = false;
+
 }
 
 /*
 |--------------------------------------------------------------------------
-| FINAL RESPONSE
+| RESPONSE
 |--------------------------------------------------------------------------
 */
 
@@ -227,14 +163,7 @@ $response = [
     "continueSession" => $continueSession
 ];
 
-/*
-|--------------------------------------------------------------------------
-| RETURN JSON
-|--------------------------------------------------------------------------
-*/
-
-header('Content-Type: application/json');
+header("Content-Type: application/json");
 
 echo json_encode($response);
-
 ?>
