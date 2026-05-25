@@ -10,7 +10,7 @@ error_reporting(E_ALL);
 */
 function firebaseRequest($method, $collection, $docId, $data = null)
 {
-    $baseURL = "https://firestore.googleapis.com/v1/projects/eventgodds/databases/(default)/documents";
+    $baseURL = "https://eventgodds-41e4f-default-rtdb.firebaseio.com";
     $url = $baseURL . "/" . $collection . "/" . $docId;
 
     if ($method == "PATCH") {
