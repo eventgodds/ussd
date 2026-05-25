@@ -5,17 +5,12 @@ error_reporting(E_ALL);
 
 /*
 |--------------------------------------------------------------------------
-| FIREBASE CONFIG
+| FIREBASE REQUEST
 |--------------------------------------------------------------------------
 */
-$projectId = "eventgodds-41e4f";
-
 function firebaseRequest($method, $collection, $docId, $data = null, $mask = null)
 {
-    global $projectId;
-
-    $baseURL = "https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents";
-
+    $baseURL = "https://firestore.googleapis.com/v1/projects/eventgodds/databases/(default)/documents";
     $url = $baseURL . "/" . $collection . "/" . $docId;
 
     if ($method == "PATCH" && $mask !== null) {
@@ -23,7 +18,6 @@ function firebaseRequest($method, $collection, $docId, $data = null, $mask = nul
     }
 
     $ch = curl_init($url);
-
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
 
@@ -36,24 +30,10 @@ function firebaseRequest($method, $collection, $docId, $data = null, $mask = nul
     ]);
 
     $response = curl_exec($ch);
-
     curl_close($ch);
 
     return json_decode($response, true);
 }
-
-/*
-|--------------------------------------------------------------------------
-| HARDCODED CONTESTANTS
-|--------------------------------------------------------------------------
-*/
-$contestants = [
-    "FS1" => "EGYIRWAA",
-    "FS2" => "AGYEKUMWAA",
-    "FS3" => "BOATEMAA",
-    "FS4" => "ABENA",
-    "FS5" => "SEDEM"
-];
 
 /*
 |--------------------------------------------------------------------------
@@ -64,32 +44,16 @@ function saveSession($sessionID, $step, $contestantCode)
 {
     $data = [
         "fields" => [
-            "step" => [
-                "integerValue" => $step
-            ],
-            "contestantCode" => [
-                "stringValue" => $contestantCode
-            ]
+            "step" => ["integerValue" => $step],
+            "contestantCode" => ["stringValue" => $contestantCode]
         ]
     ];
-
-    firebaseRequest(
-        "PATCH",
-        "sessions",
-        $sessionID,
-        $data,
-        "step,contestantCode"
-    );
+    firebaseRequest("PATCH", "sessions", $sessionID, $data, "step,contestantCode");
 }
 
 function loadSession($sessionID)
 {
-    $session = firebaseRequest(
-        "GET",
-        "sessions",
-        $sessionID
-    );
-
+    $session = firebaseRequest("GET", "sessions", $sessionID);
     return [
         "step" => $session['fields']['step']['integerValue'] ?? 0,
         "contestantCode" => $session['fields']['contestantCode']['stringValue'] ?? ''
@@ -117,160 +81,83 @@ $userData   = trim($data['userData'] ?? '');
 
 $message = "";
 $continueSession = true;
-
-$step = 0;
 $contestantCode = '';
+$step = 0;
 
 /*
 |--------------------------------------------------------------------------
-| LOAD SESSION
+| LOAD OR INIT SESSION
 |--------------------------------------------------------------------------
 */
 if ($newSession) {
-
     $step = 0;
     $contestantCode = '';
+    saveSession($sessionID, $step, $contestantCode);
 
-    saveSession($sessionID, 0, '');
-
-    $message  = "Welcome To Ghartey Events\n";
+    $message = "Welcome To Ghartey Events\n";
     $message .= "1. Vote";
-
 } else {
-
-    $session = loadSession($sessionID);
-
-    $step = $session['step'];
-    $contestantCode = $session['contestantCode'];
+    $sessionState = loadSession($sessionID);
+    $step = $sessionState['step'];
+    $contestantCode = $sessionState['contestantCode'];
 }
 
 /*
 |--------------------------------------------------------------------------
-| FLOW
-|--------------------------------------------------------------------------
-*/
-
-/*
-|--------------------------------------------------------------------------
-| STEP 0
+| FLOW LOGIC
 |--------------------------------------------------------------------------
 */
 if ($step == 0 && $userData == "1") {
-
     $step = 1;
-
     saveSession($sessionID, $step, '');
-
     $message = "Enter Contestant Code";
 }
 
-/*
-|--------------------------------------------------------------------------
-| STEP 1 - ENTER CONTESTANT CODE
-|--------------------------------------------------------------------------
-*/
-elseif ($step == 1) {
-
+elseif ($step == 1 && preg_match('/^[A-Z0-9_]+$/', strtoupper($userData))) {
     $contestantCode = strtoupper($userData);
+    $contestant = firebaseRequest("GET", "awards_nominees", $contestantCode);
 
-    if (isset($contestants[$contestantCode])) {
-
-        $contestantName = $contestants[$contestantCode];
-
+    if (isset($contestant['fields']['fullName']['stringValue'])) {
+        $contestantName = $contestant['fields']['fullName']['stringValue'];
         $step = 2;
-
         saveSession($sessionID, $step, $contestantCode);
 
-        $message  = "Vote for $contestantName\n";
-        $message .= "Nominee Code: $contestantCode\n";
-        $message .= "Vote: GHC 1\n";
-        $message .= "Enter number of votes";
-
+        $message  = "Vote For:\n";
+        $message .= $contestantName . "\n";
+        $message .= "Code: " . $contestantCode . "\n";
+        $message .= "1. Confirm\n";
+        $message .= "2. Cancel";
     } else {
-
-        $message = "Invalid Contestant Code";
+        $message = "Contestant Not Found";
         $continueSession = false;
     }
 }
 
-/*
-|--------------------------------------------------------------------------
-| STEP 2 - ENTER NUMBER OF VOTES
-|--------------------------------------------------------------------------
-*/
-elseif ($step == 2) {
+elseif ($step == 2 && $userData == "1") {
+    $contestant = firebaseRequest("GET", "awards_nominees", $contestantCode);
 
-    if (is_numeric($userData) && $userData > 0) {
-
-        $votesToAdd = (int)$userData;
-
-        /*
-        |--------------------------------------------------------------------------
-        | GET CURRENT FIRESTORE DATA
-        |--------------------------------------------------------------------------
-        */
-        $contestant = firebaseRequest(
-            "GET",
-            "awards_nominees",
-            $contestantCode
-        );
-
-        $currentVotes = 0;
-
-        if (isset($contestant['fields']['votes']['integerValue'])) {
-            $currentVotes = (int)$contestant['fields']['votes']['integerValue'];
-        }
-
-        $newVotes = $currentVotes + $votesToAdd;
-
-        /*
-        |--------------------------------------------------------------------------
-        | UPDATE FIRESTORE
-        |--------------------------------------------------------------------------
-        */
+    if (isset($contestant['fields']['votes']['integerValue'])) {
+        $currentVotes = (int)$contestant['fields']['votes']['integerValue'];
         $updateData = [
             "fields" => [
-                "fullName" => [
-                    "stringValue" => $contestants[$contestantCode]
-                ],
-                "code" => [
-                    "stringValue" => $contestantCode
-                ],
-                "votes" => [
-                    "integerValue" => $newVotes
-                ]
+                "votes" => ["integerValue" => $currentVotes + 1]
             ]
         ];
-
-        firebaseRequest(
-            "PATCH",
-            "awards_nominees",
-            $contestantCode,
-            $updateData,
-            "fullName,code,votes"
-        );
-
-        $message  = "Vote Successful\n";
-        $message .= $contestants[$contestantCode] . "\n";
-        $message .= "Total Votes Added: " . $votesToAdd;
-
-        $continueSession = false;
-
-        saveSession($sessionID, 0, '');
-
-    } else {
-
-        $message = "Enter a valid number of votes";
+        firebaseRequest("PATCH", "awards_nominees", $contestantCode, $updateData, "votes");
     }
+
+    $message = "Vote Successful";
+    $continueSession = false;
+    saveSession($sessionID, 0, '');
 }
 
-/*
-|--------------------------------------------------------------------------
-| INVALID INPUT
-|--------------------------------------------------------------------------
-*/
-else {
+elseif ($step == 2 && $userData == "2") {
+    $message = "Vote Cancelled";
+    $continueSession = false;
+    saveSession($sessionID, 0, '');
+}
 
+else {
     $message = "Invalid Input";
     $continueSession = false;
 }
@@ -289,7 +176,5 @@ $response = [
 ];
 
 header("Content-Type: application/json");
-
 echo json_encode($response);
-
 ?>
