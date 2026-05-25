@@ -157,7 +157,7 @@ elseif ($step == 2 && $userData == "2") {
     saveSession($sessionID, 0, '');
 }
 
-else {
+elseif (!$newSession && $message == "") {
     $message = "Invalid Input";
     $continueSession = false;
 }
