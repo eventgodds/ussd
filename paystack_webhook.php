@@ -1,51 +1,42 @@
 <?php
+header('Content-Type: application/json');
 
-define('PAYSTACK_SECRET_KEY', 'sk_live_b8d6b1eba856a6da4d891482e1324c55a05c69cc');
+$paystackSecretKey = "sk_live_b8d6b1eba856a6da4d891482e1324c55a05c69cc"; // Your live secret key
+$projectId = 'eventgodds-41e4f';
+$firestoreUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents";
 
 // Verify webhook signature
+$input = file_get_contents('php://input');
 $signature = $_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] ?? '';
-$payload = file_get_contents('php://input');
 
-if ($signature && hash_hmac('sha512', $payload, PAYSTACK_SECRET_KEY) === $signature) {
-    $event = json_decode($payload, true);
-    
-    if ($event['event'] == 'charge.success') {
-        $transactionRef = $event['data']['reference'];
-        $metadata = $event['data']['metadata'];
-        
-        // Update Firestore with successful payment
-        function firebaseRequest($method, $collection, $docId, $data = null) {
-            $baseURL = "https://firestore.googleapis.com/v1/projects/eventgodds/databases/(default)/documents";
-            $url = $baseURL . "/" . $collection . "/" . $docId;
-            
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
-            
-            if ($data !== null) {
-                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-            }
-            
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
-            $response = curl_exec($ch);
-            curl_close($ch);
-            
-            return json_decode($response, true);
-        }
-        
-        // Update transaction status
-        $updateData = [
-            "fields" => [
-                "webhook_status" => ["stringValue" => "confirmed"],
-                "webhook_time" => ["stringValue" => date('Y-m-d H:i:s')]
-            ]
-        ];
-        firebaseRequest("PATCH", "transactions", $transactionRef, $updateData);
-        
-        // Log webhook receipt
-        file_put_contents('paystack_webhook.log', date('Y-m-d H:i:s') . " - " . $transactionRef . " - Confirmed\n", FILE_APPEND);
-    }
+if (!$signature) {
+    http_response_code(401);
+    exit;
 }
 
-http_response_code(200);
+// Verify signature (using hash_hmac)
+$computed = hash_hmac('sha512', $input, $paystackSecretKey);
+if (!hash_equals($computed, $signature)) {
+    http_response_code(401);
+    exit;
+}
+
+$event = json_decode($input, true);
+
+if ($event['event'] == 'charge.success') {
+    $reference = $event['data']['reference'];
+    $amount = $event['data']['amount'] / 100;
+    $metadata = $event['data']['metadata'];
+    
+    // Here you would update your database with the successful payment
+    // You can store session ID in metadata to retrieve pending vote
+    
+    file_put_contents('paystack_log.txt', json_encode($event) . PHP_EOL, FILE_APPEND);
+    
+    http_response_code(200);
+    echo json_encode(['status' => 'success']);
+} else {
+    http_response_code(200);
+    echo json_encode(['status' => 'ignored']);
+}
 ?>
