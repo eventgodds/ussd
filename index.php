@@ -323,7 +323,7 @@ elseif ($_SESSION['step'] == 'awaiting_payment_choice') {
         $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
         
         // IMPORTANT: Change this to your actual domain
-        $callbackUrl = "https://yourdomain.com/ussd_handler.php";
+        $callbackUrl = "https://ussd-production-eb98.up.railway.app/paystack_webhook.php";
         
         $payment = createPaystackPayment($msisdn, $totalAmount, $reference, $callbackUrl);
         
