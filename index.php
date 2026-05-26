@@ -2,9 +2,12 @@
 
 header("Content-Type: application/json");
 
+$response = "Welcome to Ghartey Event\n";
+$response .= "1. Vote";
+
 echo json_encode([
-    "response" => "Welcome to Ghartey Event Voting",
-    "continueSession" => false
+    "response" => $response,
+    "continueSession" => true
 ]);
 
 ?>
