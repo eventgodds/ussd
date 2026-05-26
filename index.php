@@ -1,15 +1,10 @@
 <?php
 
-header('Content-Type: application/json');
+header("Content-Type: application/json");
 
-$response = [
-    "sessionID" => "123",
-    "userID" => "123",
-    "msisdn" => "233000000000",
-    "message" => "USSD Working",
+echo json_encode([
+    "response" => "Welcome to Ghartey Event Voting",
     "continueSession" => false
-];
-
-echo json_encode($response);
+]);
 
 ?>
