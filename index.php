@@ -202,7 +202,7 @@ $continueSession = false;
 if ($newSession == true) {
     $_SESSION = []; // Clear session
     $message = "Welcome to Ghartey Event Voting\n";
-    $message .= "Enter Contestant Code (FS1, FS2, FS3, FS4, FS5):";
+    $message .= "Enter Contestant Code:";
     $continueSession = true;
 }
 
@@ -222,7 +222,7 @@ elseif (preg_match('/^FS[1-5]$/i', $userData)) {
         $continueSession = true;
     } else {
         $message = "Invalid Contestant Code!\n";
-        $message .= "Please enter valid code (FS1, FS2, FS3, FS4, FS5):";
+        $message .= "Please enter valid code:";
         $continueSession = true;
     }
 }
