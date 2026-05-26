@@ -1,10 +1,15 @@
 <?php
 
-header("Content-Type: application/json");
+header('Content-Type: application/json');
 
-echo json_encode([
-    "response" => "Welcome to Ghartey Event Voting",
+$response = [
+    "sessionID" => "1",
+    "userID" => "1",
+    "msisdn" => "233000000000",
+    "message" => "Welcome to Ghartey Event Voting",
     "continueSession" => false
-]);
+];
+
+echo json_encode($response);
 
 ?>
