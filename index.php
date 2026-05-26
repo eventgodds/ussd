@@ -2,48 +2,67 @@
 
 header('Content-Type: application/json');
 
-// Read JSON request
+// Read request
 $json = file_get_contents('php://input');
 $data = json_decode($json, true);
 
-// Get values safely
+// Get values
 $sessionID  = $data['sessionID'] ?? '';
 $userID     = $data['userID'] ?? '';
 $newSession = $data['newSession'] ?? false;
 $msisdn     = $data['msisdn'] ?? '';
 $userData   = trim($data['userData'] ?? '');
 
-// Menu Logic
+// Default values
+$message = "";
+$continueSession = false;
+
+// MAIN MENU
 if ($newSession == true) {
 
     $message = "Welcome to Ghartey Event\n";
     $message .= "1. Vote";
 
     $continueSession = true;
+}
 
-} elseif ($newSession == false && $userData == "1") {
+// CONTESTANT MENU
+elseif ($userData == "1") {
 
     $message = "Select Contestant\n";
     $message .= "1. Nana\n";
-    $message .= "2. Ama";
+    $message .= "2. Ama\n";
+    $message .= "3. Kojo";
 
     $continueSession = true;
+}
 
-} elseif ($newSession == false && $userData == "1*1") {
+// VOTE NANA
+elseif ($userData == "1*1") {
 
-    $message = "You voted for Nana";
+    $message = "Vote successful for Nana";
     $continueSession = false;
+}
 
-} elseif ($newSession == false && $userData == "1*2") {
+// VOTE AMA
+elseif ($userData == "1*2") {
 
-    $message = "You voted for Ama";
+    $message = "Vote successful for Ama";
     $continueSession = false;
+}
 
-} else {
+// VOTE KOJO
+elseif ($userData == "1*3") {
+
+    $message = "Vote successful for Kojo";
+    $continueSession = false;
+}
+
+// INVALID INPUT
+else {
 
     $message = "Invalid option";
     $continueSession = false;
-
 }
 
 // Response
@@ -54,4 +73,5 @@ echo json_encode([
     "message" => $message,
     "continueSession" => $continueSession
 ]);
+
 ?>
