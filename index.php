@@ -218,7 +218,7 @@ elseif (preg_match('/^FS[1-5]$/i', $userData)) {
         $message .= "Contestant Code: " . $contestant['code'] . "\n";
         $message .= "Vote Price: GHC " . $contestant['voteAmount'] . " per vote\n";
         $message .= "Current Votes: " . $contestant['votes'] . "\n";
-        $message .= "\nEnter number of votes (1-1000):";
+        $message .= "\nEnter number of votes:";
         $continueSession = true;
     } else {
         $message = "Invalid Contestant Code!\n";
