@@ -2,7 +2,7 @@
 header('Content-Type: application/json');
 
 // Configuration
-$paystackSecretKey = "sk_live_xxxxxxxxxxxxx"; // REPLACE WITH YOUR ACTUAL SECRET KEY
+$paystackSecretKey = "sk_live_b8d6b1eba856a6da4d891482e1324c55a05c69cc"; // REPLACE WITH YOUR ACTUAL SECRET KEY
 $paystackPublicKey = "pk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e";
 $projectId = 'eventgodds-41e4f';
 $firestoreUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents";
