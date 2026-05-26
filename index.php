@@ -1,14 +1,13 @@
 <?php
 header('Content-Type: application/json');
 
-// Load environment variables (create this function or use vlucas/phpdotenv)
-$paystackSecretKey = "sk_live_xxxxxxxxxxxxx"; // REPLACE WITH YOUR LIVE SECRET KEY
-$paystackPublicKey = "pk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e";
+// Firebase Firestore REST API configuration
 $projectId = 'eventgodds-41e4f';
 $firestoreUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents";
 
-// Start session for tracking USSD state
-session_start();
+// Paystack configuration (LIVE)
+$paystackSecretKey = 'sk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
+$paystackPublicKey = 'pk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
 
 // Read request from Arkesel
 $json = file_get_contents('php://input');
@@ -21,78 +20,99 @@ $newSession = $data['newSession'] ?? false;
 $msisdn     = $data['msisdn'] ?? '';
 $userData   = trim($data['userData'] ?? '');
 
-// Initialize session for new USSD session
-if ($newSession) {
-    $_SESSION = [];
-    $_SESSION['msisdn'] = $msisdn;
-    $_SESSION['step'] = 'main_menu';
-}
+session_start();
 
-// Function to fetch contestants from Firestore
-function fetchContestants($firestoreUrl) {
+// Function to fetch contestant by code from Firestore
+function fetchContestantByCode($firestoreUrl, $code) {
     $url = $firestoreUrl . "/contestants";
     
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
     
     $response = curl_exec($ch);
     curl_close($ch);
     
     $data = json_decode($response, true);
-    $contestants = [];
     
     if (isset($data['documents'])) {
         foreach ($data['documents'] as $doc) {
             $fields = $doc['fields'];
-            if (isset($fields['code']['stringValue']) && preg_match('/^FS[1-5]$/', $fields['code']['stringValue'])) {
-                // Determine which field contains the name
-                $name = $fields['stageName']['stringValue'] ?? $fields['name']['stringValue'] ?? '';
+            if (isset($fields['code']['stringValue']) && 
+                strtoupper($fields['code']['stringValue']) === strtoupper($code)) {
                 
-                $contestants[] = [
+                return [
                     'id' => basename($doc['name']),
                     'code' => $fields['code']['stringValue'],
-                    'name' => $name,
+                    'name' => $fields['name']['stringValue'] ?? $fields['stageName']['stringValue'] ?? '',
+                    'stageName' => $fields['stageName']['stringValue'] ?? $fields['name']['stringValue'] ?? '',
                     'votes' => $fields['votes']['integerValue'] ?? 0,
-                    'voteAmount' => $fields['voteAmount']['integerValue'] ?? 1
+                    'voteAmount' => $fields['voteAmount']['integerValue'] ?? 1,
+                    'engagement' => $fields['engagement']['integerValue'] ?? 0
                 ];
             }
         }
-        
-        // Sort by code
-        usort($contestants, function($a, $b) {
-            return strcmp($a['code'], $b['code']);
-        });
     }
     
-    return $contestants;
+    return null;
 }
 
-// Function to create Paystack payment intent
+// Function to update votes in Firestore
+function updateContestantVotes($firestoreUrl, $documentId, $newVotes) {
+    $updateUrl = $firestoreUrl . "/contestants/{$documentId}?updateMask.fieldPaths=votes";
+    
+    $updateData = [
+        'fields' => [
+            'votes' => [
+                'integerValue' => (string)$newVotes
+            ]
+        ]
+    ];
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $updateUrl);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PATCH');
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($updateData));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    return $httpCode == 200;
+}
+
+// Function to create Paystack payment link
 function createPaystackPayment($email, $amount, $reference, $callbackUrl) {
     global $paystackSecretKey;
     
     $url = "https://api.paystack.co/transaction/initialize";
     
-    $fields = [
+    $data = [
         'email' => $email,
-        'amount' => $amount * 100, // Convert to kobo/pesewas
+        'amount' => $amount * 100, // Paystack uses kobo (GHS 1 = 100 kobo)
         'reference' => $reference,
         'callback_url' => $callbackUrl,
-        'metadata' => json_encode([
-            'custom_fields' => [
-                ['display_name' => 'USSD Session', 'variable_name' => 'session_id', 'value' => session_id()]
-            ]
-        ])
+        'metadata' => [
+            'msisdn' => $_SESSION['msisdn'] ?? '',
+            'contestant_code' => $_SESSION['pending_contestant']['code'] ?? '',
+            'votes' => $_SESSION['pending_votes'] ?? 0
+        ]
     ];
     
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($fields));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Bearer ' . $paystackSecretKey,
@@ -106,22 +126,18 @@ function createPaystackPayment($email, $amount, $reference, $callbackUrl) {
     if ($httpCode == 200) {
         $result = json_decode($response, true);
         if ($result['status']) {
-            return [
-                'success' => true,
-                'authorization_url' => $result['data']['authorization_url'],
-                'reference' => $result['data']['reference']
-            ];
+            return $result['data']['authorization_url'];
         }
     }
     
-    return ['success' => false, 'message' => 'Payment initialization failed'];
+    return false;
 }
 
 // Function to verify Paystack payment
-function verifyPayment($reference) {
+function verifyPaystackPayment($reference) {
     global $paystackSecretKey;
     
-    $url = "https://api.paystack.co/transaction/verify/" . $reference;
+    $url = "https://api.paystack.co/transaction/verify/{$reference}";
     
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
@@ -138,205 +154,158 @@ function verifyPayment($reference) {
     $result = json_decode($response, true);
     
     if ($result['status'] && $result['data']['status'] == 'success') {
-        return [
-            'success' => true,
-            'amount' => $result['data']['amount'] / 100,
-            'reference' => $reference
-        ];
+        return $result['data'];
     }
     
-    return ['success' => false];
+    return false;
 }
 
-// Function to update votes in Firestore
-function updateVotesInFirestore($firestoreUrl, $contestantId, $currentVotes, $additionalVotes) {
-    $newVotes = $currentVotes + $additionalVotes;
-    $updateUrl = $firestoreUrl . "/contestants/{$contestantId}?updateMask.fieldPaths=votes";
-    
-    $updateData = [
-        'fields' => [
-            'votes' => ['integerValue' => (string)$newVotes]
-        ]
-    ];
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $updateUrl);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PATCH');
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($updateData));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    
-    return $httpCode == 200;
-}
-
-// Fetch contestants
-$contestants = fetchContestants($firestoreUrl);
-
-// USSD State Machine
+// Default values
 $message = "";
 $continueSession = false;
 
-// Handle payment verification callback (webhook)
-if (isset($_GET['paystack_callback'])) {
-    $reference = $_GET['reference'] ?? '';
-    if ($reference) {
-        $verification = verifyPayment($reference);
-        if ($verification['success']) {
-            // Update votes in database
-            if (isset($_SESSION['pending_vote'])) {
-                $pending = $_SESSION['pending_vote'];
-                $success = updateVotesInFirestore($firestoreUrl, $pending['contestant_id'], $pending['current_votes'], $pending['votes']);
-                
-                if ($success) {
-                    echo "Payment successful! Your vote has been recorded.";
-                } else {
-                    echo "Payment successful but vote recording failed. Please contact support.";
-                }
-                unset($_SESSION['pending_vote']);
-            }
-        } else {
-            echo "Payment verification failed.";
+// Check for payment callback (from Paystack)
+if (isset($_GET['reference'])) {
+    $reference = $_GET['reference'];
+    $paymentData = verifyPaystackPayment($reference);
+    
+    if ($paymentData) {
+        $metadata = $paymentData['metadata'];
+        $contestantCode = $metadata['contestant_code'];
+        $votes = intval($metadata['votes']);
+        
+        // Fetch current contestant data
+        $contestant = fetchContestantByCode($firestoreUrl, $contestantCode);
+        
+        if ($contestant) {
+            $newVotes = $contestant['votes'] + $votes;
+            updateContestantVotes($firestoreUrl, $contestant['id'], $newVotes);
+            
+            // Log successful payment
+            $logEntry = date('Y-m-d H:i:s') . " | PAYMENT SUCCESS | Ref: {$reference} | Contestant: {$contestantCode} | Votes: {$votes} | Amount: GHS " . ($votes * $contestant['voteAmount']) . "\n";
+            file_put_contents('payment_log.txt', $logEntry, FILE_APPEND);
+            
+            echo "Payment successful! {$votes} votes added for {$contestant['stageName']}";
+            exit;
         }
+    } else {
+        echo "Payment verification failed!";
+        exit;
     }
-    exit;
 }
 
 // USSD Menu Logic
-if ($newSession || $_SESSION['step'] == 'main_menu') {
-    $message = "Welcome to Ghartey Event\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Vote Counts";
-    $_SESSION['step'] = 'main_menu';
-    $continueSession = true;
-    
-    if (!$newSession && $userData == "0") {
-        $message = "Thank you for using Ghartey Event. Goodbye!";
-        $continueSession = false;
-        session_destroy();
-    }
-}
-elseif ($userData == "1" || $_SESSION['step'] == 'selecting_contestant') {
-    if ($userData == "1") {
-        $_SESSION['step'] = 'selecting_contestant';
-    }
-    
-    $message = "Select Contestant:\n";
-    foreach ($contestants as $index => $contestant) {
-        $num = $index + 1;
-        $message .= "{$num}. {$contestant['name']} ({$contestant['code']}) - GHC {$contestant['voteAmount']}/vote\n";
-    }
-    $message .= "0. Back to Main Menu";
+$message = "";
+$continueSession = false;
+
+// MAIN WELCOME (First time)
+if ($newSession == true) {
+    $_SESSION = []; // Clear session
+    $message = "Welcome to Ghartey Event Voting\n";
+    $message .= "Enter Contestant Code (FS1, FS2, FS3, FS4, FS5):";
     $continueSession = true;
 }
-elseif ($_SESSION['step'] == 'selecting_contestant' && preg_match('/^[1-5]$/', $userData)) {
-    $selection = intval($userData) - 1;
-    if (isset($contestants[$selection])) {
-        $_SESSION['selected_contestant'] = $contestants[$selection];
-        $_SESSION['step'] = 'entering_votes';
+
+// Check if user entered a contestant code (FS1-FS5)
+elseif (preg_match('/^FS[1-5]$/i', $userData)) {
+    $contestantCode = strtoupper($userData);
+    $contestant = fetchContestantByCode($firestoreUrl, $contestantCode);
+    
+    if ($contestant) {
+        $_SESSION['selected_contestant'] = $contestant;
         
-        $contestant = $contestants[$selection];
-        $message = "Vote for {$contestant['name']}\n";
-        $message .= "Nominee Code: {$contestant['code']}\n";
-        $message .= "Vote: GHC {$contestant['voteAmount']} per vote\n";
-        $message .= "Current votes: {$contestant['votes']}\n";
-        $message .= "Enter number of votes (1-1000):";
+        $message = "Vote for " . $contestant['stageName'] . "\n";
+        $message .= "Contestant Code: " . $contestant['code'] . "\n";
+        $message .= "Vote Price: GHC " . $contestant['voteAmount'] . " per vote\n";
+        $message .= "Current Votes: " . $contestant['votes'] . "\n";
+        $message .= "\nEnter number of votes (1-1000):";
+        $continueSession = true;
+    } else {
+        $message = "Invalid Contestant Code!\n";
+        $message .= "Please enter valid code (FS1, FS2, FS3, FS4, FS5):";
         $continueSession = true;
     }
 }
-elseif ($_SESSION['step'] == 'entering_votes' && is_numeric($userData) && $userData >= 1 && $userData <= 1000) {
-    $numberOfVotes = intval($userData);
+
+// User entered number of votes
+elseif (isset($_SESSION['selected_contestant']) && is_numeric($userData) && $userData > 0) {
+    $votes = intval($userData);
     $contestant = $_SESSION['selected_contestant'];
-    $totalCost = $numberOfVotes * $contestant['voteAmount'];
     
-    $_SESSION['pending_vote'] = [
-        'contestant_id' => $contestant['id'],
-        'contestant_code' => $contestant['code'],
-        'contestant_name' => $contestant['name'],
-        'votes' => $numberOfVotes,
-        'total_cost' => $totalCost,
-        'current_votes' => $contestant['votes']
-    ];
-    
-    $_SESSION['step'] = 'confirming_payment';
-    
-    $message = "Vote Summary:\n";
-    $message .= "Contestant: {$contestant['name']}\n";
-    $message .= "Votes: {$numberOfVotes}\n";
-    $message .= "Total: GHC {$totalCost}\n\n";
-    $message .= "1. Proceed to Payment\n";
-    $message .= "2. Cancel";
-    $continueSession = true;
+    if ($votes < 1 || $votes > 1000) {
+        $message = "Invalid number! Please enter between 1 and 1000 votes:";
+        $continueSession = true;
+    } else {
+        $totalAmount = $votes * $contestant['voteAmount'];
+        
+        $_SESSION['pending_votes'] = $votes;
+        $_SESSION['pending_contestant'] = $contestant;
+        $_SESSION['msisdn'] = $msisdn;
+        
+        $message = "Vote Summary:\n";
+        $message .= "Contestant: " . $contestant['stageName'] . " (" . $contestant['code'] . ")\n";
+        $message .= "Votes: " . $votes . "\n";
+        $message .= "Total Amount: GHC " . $totalAmount . "\n";
+        $message .= "\n1. Proceed to Payment\n";
+        $message .= "2. Cancel";
+        $continueSession = true;
+    }
 }
-elseif ($_SESSION['step'] == 'confirming_payment' && $userData == "1") {
-    $pending = $_SESSION['pending_vote'];
-    $email = $_SESSION['msisdn'] . "@user.ussd.com"; // Generate email from phone number
-    $reference = "VOTE_" . time() . "_" . session_id();
-    $callbackUrl = "https://your-domain.com/ussd_handler.php?paystack_callback=1";
+
+// Process payment selection
+elseif ($userData == "1" && isset($_SESSION['pending_contestant'])) {
+    $contestant = $_SESSION['pending_contestant'];
+    $votes = $_SESSION['pending_votes'];
+    $totalAmount = $votes * $contestant['voteAmount'];
     
-    $payment = createPaystackPayment($email, $pending['total_cost'], $reference, $callbackUrl);
+    // Generate unique reference
+    $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
     
-    if ($payment['success']) {
-        // For USSD, we need to provide a short URL or payment code
-        // Paystack USSD is limited, so we'll provide payment link
-        $message = "To complete payment of GHC {$pending['total_cost']}:\n";
-        $message .= "Visit: " . shortenUrl($payment['authorization_url']) . "\n";
-        $message .= "Or use Paystack USSD: *402*" . $payment['reference'] . "#\n";
-        $message .= "After payment, dial *123# again to confirm.";
+    // Create Paystack payment link
+    $customerEmail = $msisdn . "@ussd.voter.com"; // Fallback email
+    
+    $paymentUrl = createPaystackPayment($customerEmail, $totalAmount, $reference, "https://yourdomain.com/ussd_handler.php");
+    
+    if ($paymentUrl) {
+        $_SESSION['payment_reference'] = $reference;
+        
+        $message = "Payment Required: GHC " . $totalAmount . "\n";
+        $message .= "Please click the link to complete payment:\n";
+        $message .= $paymentUrl . "\n\n";
+        $message .= "After payment, your votes will be added automatically.\n";
+        $message .= "Thank you for voting!";
         $continueSession = false;
         
-        // Store reference for verification
-        $_SESSION['payment_reference'] = $payment['reference'];
+        // Log payment initiation
+        $logEntry = date('Y-m-d H:i:s') . " | PAYMENT INITIATED | MSISDN: {$msisdn} | Ref: {$reference} | Contestant: {$contestant['code']} | Votes: {$votes} | Amount: GHC {$totalAmount}\n";
+        file_put_contents('payment_log.txt', $logEntry, FILE_APPEND);
     } else {
-        $message = "Payment initialization failed. Please try again.";
+        $message = "Payment system error. Please try again later.";
         $continueSession = false;
-        unset($_SESSION['pending_vote']);
-        $_SESSION['step'] = 'main_menu';
     }
 }
-elseif ($_SESSION['step'] == 'confirming_payment' && $userData == "2") {
-    $message = "Vote cancelled.";
-    $continueSession = false;
-    unset($_SESSION['pending_vote']);
-    $_SESSION['step'] = 'main_menu';
-}
-elseif ($userData == "2") {
-    $message = "Current Vote Counts:\n";
-    foreach ($contestants as $contestant) {
-        $message .= "{$contestant['name']} ({$contestant['code']}): {$contestant['votes']} votes\n";
-    }
-    $message .= "\n0. Back to Main Menu";
-    $continueSession = true;
-    $_SESSION['step'] = 'viewing_counts';
-}
-elseif ($_SESSION['step'] == 'viewing_counts' && $userData == "0") {
-    $_SESSION['step'] = 'main_menu';
-    $message = "Welcome to Ghartey Event\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Vote Counts";
+
+// Cancel payment
+elseif ($userData == "2" && isset($_SESSION['pending_contestant'])) {
+    unset($_SESSION['pending_contestant']);
+    unset($_SESSION['pending_votes']);
+    
+    $message = "Vote cancelled.\n";
+    $message .= "Enter Contestant Code (FS1-FS5) to vote:";
     $continueSession = true;
 }
+
+// Handle other inputs or go back to start
 else {
-    $message = "Invalid option. Please try again.\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Vote Counts\n";
-    $message .= "0. Exit";
+    $message = "Welcome to Ghartey Event Voting\n";
+    $message .= "Enter Contestant Code (FS1, FS2, FS3, FS4, FS5):";
     $continueSession = true;
-    $_SESSION['step'] = 'main_menu';
+    unset($_SESSION['selected_contestant']);
+    unset($_SESSION['pending_contestant']);
+    unset($_SESSION['pending_votes']);
 }
 
-// Function to shorten URL (for better USSD display)
-function shortenUrl($url) {
-    // You can use a URL shortener API here
-    // For now, return the full URL (USSD supports it)
-    return $url;
-}
-
-// Response
+// Response to Arkesel
 echo json_encode([
     "sessionID" => $sessionID,
     "userID" => $userID,
@@ -344,4 +313,5 @@ echo json_encode([
     "message" => $message,
     "continueSession" => $continueSession
 ]);
+
 ?>
