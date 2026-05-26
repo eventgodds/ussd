@@ -5,6 +5,9 @@ header('Content-Type: application/json');
 $projectId = 'eventgodds-41e4f';
 $firestoreUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents";
 
+$projectId = 'eventgodds';
+$firestoreUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents";
+
 // Paystack configuration (LIVE)
 $paystackSecretKey = 'sk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
 $paystackPublicKey = 'pk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
@@ -202,7 +205,7 @@ $continueSession = false;
 if ($newSession == true) {
     $_SESSION = []; // Clear session
     $message = "Welcome to Ghartey Event Voting\n";
-    $message .= "Enter Contestant Code (FS1, FS2, FS3, FS4, FS5):";
+    $message .= "Enter Contestant Code:";
     $continueSession = true;
 }
 
