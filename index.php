@@ -2,14 +2,42 @@
 
 header('Content-Type: application/json');
 
-$response = [
-    "sessionID" => "1",
-    "userID" => "1",
-    "msisdn" => "233000000000",
-    "message" => "Welcome to Ghartey Event Voting",
-    "continueSession" => false
-];
+// Read JSON request
+$json = file_get_contents('php://input');
+$data = json_decode($json, true);
 
-echo json_encode($response);
+// Get values safely
+$sessionID  = $data['sessionID'] ?? '';
+$userID     = $data['userID'] ?? '';
+$newSession = $data['newSession'] ?? false;
+$msisdn     = $data['msisdn'] ?? '';
+$userData   = trim($data['userData'] ?? '');
 
+// Menu Logic
+if ($newSession == true) {
+
+    $message = "Welcome to Ghartey Event\n";
+    $message .= "1. Vote";
+
+    $continueSession = true;
+
+} elseif ($newSession == false && $userData == "1") {
+
+    $message = "Voting starts soon";
+    $continueSession = false;
+
+} else {
+
+    $message = "Invalid option";
+    $continueSession = false;
+}
+
+// Response
+echo json_encode([
+    "sessionID" => $sessionID,
+    "userID" => $userID,
+    "msisdn" => $msisdn,
+    "message" => $message,
+    "continueSession" => $continueSession
+]);
 ?>
