@@ -208,7 +208,7 @@ if (isset($_GET['paystack_callback'])) {
 
 // USSD Menu Logic
 if ($newSession || $_SESSION['step'] == 'main_menu') {
-    $message = "Welcome to Ghartey Event\n";
+    $message = "Welcome to Ghartey Events\n";
     $message .= "1. Vote\n";
     $message .= "2. Check Vote Counts";
     $_SESSION['step'] = 'main_menu';
