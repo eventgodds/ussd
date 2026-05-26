@@ -39,4 +39,38 @@ if ($event['event'] == 'charge.success') {
     http_response_code(200);
     echo json_encode(['status' => 'ignored']);
 }
+
+// Add this function for mobile money payments
+function initiateMobileMoneyPayment($phone, $amount, $reference) {
+    global $paystackSecretKey;
+    
+    $url = "https://api.paystack.co/charge";
+    
+    $fields = [
+        'amount' => $amount * 100,
+        'email' => $phone . "@user.ussd.com",
+        'currency' => 'GHS',
+        'mobile_money' => [
+            'phone' => $phone,
+            'provider' => 'mtn' // or 'vodafone', 'airteltigo'
+        ],
+        'reference' => $reference
+    ];
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($fields));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Bearer ' . $paystackSecretKey,
+        'Content-Type: application/json'
+    ]);
+    
+    $response = curl_exec($ch);
+    curl_close($ch);
+    
+    return json_decode($response, true);
+}
 ?>
