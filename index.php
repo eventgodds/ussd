@@ -1,13 +1,13 @@
 <?php
 header('Content-Type: application/json');
 
-// Load environment variables (create this function or use vlucas/phpdotenv)
-$paystackSecretKey = "sk_live_b8d6b1eba856a6da4d891482e1324c55a05c69cc"; // REPLACE WITH YOUR LIVE SECRET KEY
+// Configuration
+$paystackSecretKey = "sk_live_xxxxxxxxxxxxx"; // REPLACE WITH YOUR ACTUAL SECRET KEY
 $paystackPublicKey = "pk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e";
 $projectId = 'eventgodds-41e4f';
 $firestoreUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/documents";
 
-// Start session for tracking USSD state
+// Start session for USSD state tracking
 session_start();
 
 // Read request from Arkesel
@@ -15,18 +15,11 @@ $json = file_get_contents('php://input');
 $data = json_decode($json, true);
 
 // Get values
-$sessionID  = $data['sessionID'] ?? '';
-$userID     = $data['userID'] ?? '';
+$sessionID = $data['sessionID'] ?? '';
+$userID = $data['userID'] ?? '';
 $newSession = $data['newSession'] ?? false;
-$msisdn     = $data['msisdn'] ?? '';
-$userData   = trim($data['userData'] ?? '');
-
-// Initialize session for new USSD session
-if ($newSession) {
-    $_SESSION = [];
-    $_SESSION['msisdn'] = $msisdn;
-    $_SESSION['step'] = 'main_menu';
-}
+$msisdn = $data['msisdn'] ?? '';
+$userData = trim($data['userData'] ?? '');
 
 // Function to fetch contestants from Firestore
 function fetchContestants($firestoreUrl) {
@@ -48,7 +41,6 @@ function fetchContestants($firestoreUrl) {
         foreach ($data['documents'] as $doc) {
             $fields = $doc['fields'];
             if (isset($fields['code']['stringValue']) && preg_match('/^FS[1-5]$/', $fields['code']['stringValue'])) {
-                // Determine which field contains the name
                 $name = $fields['stageName']['stringValue'] ?? $fields['name']['stringValue'] ?? '';
                 
                 $contestants[] = [
@@ -61,7 +53,7 @@ function fetchContestants($firestoreUrl) {
             }
         }
         
-        // Sort by code
+        // Sort by code (FS1, FS2, FS3, FS4, FS5)
         usort($contestants, function($a, $b) {
             return strcmp($a['code'], $b['code']);
         });
@@ -70,21 +62,45 @@ function fetchContestants($firestoreUrl) {
     return $contestants;
 }
 
-// Function to create Paystack payment intent
-function createPaystackPayment($email, $amount, $reference, $callbackUrl) {
+// Function to update votes in Firestore
+function updateVotesInFirestore($firestoreUrl, $contestantId, $newVotes) {
+    $updateUrl = $firestoreUrl . "/contestants/{$contestantId}?updateMask.fieldPaths=votes";
+    
+    $updateData = [
+        'fields' => [
+            'votes' => ['integerValue' => (string)$newVotes]
+        ]
+    ];
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $updateUrl);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PATCH');
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($updateData));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    return $httpCode == 200;
+}
+
+// Function to initiate Paystack payment
+function initiatePaystackPayment($email, $amount, $reference, $callbackUrl) {
     global $paystackSecretKey;
     
     $url = "https://api.paystack.co/transaction/initialize";
     
     $fields = [
         'email' => $email,
-        'amount' => $amount * 100, // Convert to kobo/pesewas
+        'amount' => $amount * 100, // Convert to pesewas
         'reference' => $reference,
         'callback_url' => $callbackUrl,
         'metadata' => json_encode([
-            'custom_fields' => [
-                ['display_name' => 'USSD Session', 'variable_name' => 'session_id', 'value' => session_id()]
-            ]
+            'session_id' => session_id(),
+            'phone' => $email
         ])
     ];
     
@@ -117,129 +133,79 @@ function createPaystackPayment($email, $amount, $reference, $callbackUrl) {
     return ['success' => false, 'message' => 'Payment initialization failed'];
 }
 
-// Function to verify Paystack payment
-function verifyPayment($reference) {
-    global $paystackSecretKey;
-    
-    $url = "https://api.paystack.co/transaction/verify/" . $reference;
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . $paystackSecretKey,
-        'Content-Type: application/json'
-    ]);
-    
-    $response = curl_exec($ch);
-    curl_close($ch);
-    
-    $result = json_decode($response, true);
-    
-    if ($result['status'] && $result['data']['status'] == 'success') {
-        return [
-            'success' => true,
-            'amount' => $result['data']['amount'] / 100,
-            'reference' => $reference
-        ];
-    }
-    
-    return ['success' => false];
-}
-
-// Function to update votes in Firestore
-function updateVotesInFirestore($firestoreUrl, $contestantId, $currentVotes, $additionalVotes) {
-    $newVotes = $currentVotes + $additionalVotes;
-    $updateUrl = $firestoreUrl . "/contestants/{$contestantId}?updateMask.fieldPaths=votes";
-    
-    $updateData = [
-        'fields' => [
-            'votes' => ['integerValue' => (string)$newVotes]
-        ]
-    ];
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $updateUrl);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PATCH');
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($updateData));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    
-    return $httpCode == 200;
-}
-
 // Fetch contestants
 $contestants = fetchContestants($firestoreUrl);
 
-// USSD State Machine
-$message = "";
-$continueSession = false;
-
-// Handle payment verification callback (webhook)
-if (isset($_GET['paystack_callback'])) {
-    $reference = $_GET['reference'] ?? '';
-    if ($reference) {
-        $verification = verifyPayment($reference);
-        if ($verification['success']) {
-            // Update votes in database
-            if (isset($_SESSION['pending_vote'])) {
-                $pending = $_SESSION['pending_vote'];
-                $success = updateVotesInFirestore($firestoreUrl, $pending['contestant_id'], $pending['current_votes'], $pending['votes']);
-                
-                if ($success) {
-                    echo "Payment successful! Your vote has been recorded.";
-                } else {
-                    echo "Payment successful but vote recording failed. Please contact support.";
-                }
-                unset($_SESSION['pending_vote']);
-            }
-        } else {
-            echo "Payment verification failed.";
-        }
-    }
-    exit;
+// Initialize USSD session for new users
+if ($newSession) {
+    $_SESSION['step'] = 'main_menu';
+    $_SESSION['msisdn'] = $msisdn;
+    $_SESSION['selected_contestant'] = null;
+    $_SESSION['vote_count'] = null;
 }
 
 // USSD Menu Logic
-if ($newSession || $_SESSION['step'] == 'main_menu') {
-    $message = "Welcome to Ghartey Events\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Vote Counts";
-    $_SESSION['step'] = 'main_menu';
-    $continueSession = true;
-    
-    if (!$newSession && $userData == "0") {
+$message = "";
+$continueSession = true;
+
+// Handle main menu
+if ($_SESSION['step'] == 'main_menu') {
+    if (empty($userData)) {
+        $message = "Welcome to Ghartey Event\n";
+        $message .= "1. Vote\n";
+        $message .= "2. Check Vote Counts\n";
+        $message .= "0. Exit";
+        $continueSession = true;
+    } 
+    elseif ($userData == "1") {
+        $_SESSION['step'] = 'select_contestant';
+        $message = "Select Contestant:\n";
+        foreach ($contestants as $index => $contestant) {
+            $num = $index + 1;
+            $message .= "{$num}. {$contestant['name']} ({$contestant['code']}) - GHC {$contestant['voteAmount']}/vote\n";
+        }
+        $message .= "0. Back";
+        $continueSession = true;
+    }
+    elseif ($userData == "2") {
+        $message = "Current Vote Counts:\n";
+        foreach ($contestants as $contestant) {
+            $message .= "{$contestant['name']} ({$contestant['code']}): {$contestant['votes']} votes\n";
+        }
+        $message .= "\n0. Back to Main Menu";
+        $continueSession = true;
+        $_SESSION['step'] = 'view_votes';
+    }
+    elseif ($userData == "0") {
         $message = "Thank you for using Ghartey Event. Goodbye!";
         $continueSession = false;
         session_destroy();
     }
-}
-elseif ($userData == "1" || $_SESSION['step'] == 'selecting_contestant') {
-    if ($userData == "1") {
-        $_SESSION['step'] = 'selecting_contestant';
+    else {
+        $message = "Invalid option. Please try again.\n";
+        $message .= "1. Vote\n";
+        $message .= "2. Check Vote Counts\n";
+        $message .= "0. Exit";
+        $continueSession = true;
     }
-    
-    $message = "Select Contestant:\n";
-    foreach ($contestants as $index => $contestant) {
-        $num = $index + 1;
-        $message .= "{$num}. {$contestant['name']} ({$contestant['code']}) - GHC {$contestant['voteAmount']}/vote\n";
-    }
-    $message .= "0. Back to Main Menu";
-    $continueSession = true;
 }
-elseif ($_SESSION['step'] == 'selecting_contestant' && preg_match('/^[1-5]$/', $userData)) {
-    $selection = intval($userData) - 1;
-    if (isset($contestants[$selection])) {
-        $_SESSION['selected_contestant'] = $contestants[$selection];
-        $_SESSION['step'] = 'entering_votes';
+
+// Handle contestant selection
+elseif ($_SESSION['step'] == 'select_contestant') {
+    if ($userData == "0") {
+        $_SESSION['step'] = 'main_menu';
+        $message = "Welcome to Ghartey Event\n";
+        $message .= "1. Vote\n";
+        $message .= "2. Check Vote Counts\n";
+        $message .= "0. Exit";
+        $continueSession = true;
+    }
+    elseif (is_numeric($userData) && $userData >= 1 && $userData <= count($contestants)) {
+        $index = intval($userData) - 1;
+        $_SESSION['selected_contestant'] = $contestants[$index];
+        $_SESSION['step'] = 'enter_votes';
         
-        $contestant = $contestants[$selection];
+        $contestant = $_SESSION['selected_contestant'];
         $message = "Vote for {$contestant['name']}\n";
         $message .= "Nominee Code: {$contestant['code']}\n";
         $message .= "Vote: GHC {$contestant['voteAmount']} per vote\n";
@@ -247,93 +213,178 @@ elseif ($_SESSION['step'] == 'selecting_contestant' && preg_match('/^[1-5]$/', $
         $message .= "Enter number of votes (1-1000):";
         $continueSession = true;
     }
-}
-elseif ($_SESSION['step'] == 'entering_votes' && is_numeric($userData) && $userData >= 1 && $userData <= 1000) {
-    $numberOfVotes = intval($userData);
-    $contestant = $_SESSION['selected_contestant'];
-    $totalCost = $numberOfVotes * $contestant['voteAmount'];
-    
-    $_SESSION['pending_vote'] = [
-        'contestant_id' => $contestant['id'],
-        'contestant_code' => $contestant['code'],
-        'contestant_name' => $contestant['name'],
-        'votes' => $numberOfVotes,
-        'total_cost' => $totalCost,
-        'current_votes' => $contestant['votes']
-    ];
-    
-    $_SESSION['step'] = 'confirming_payment';
-    
-    $message = "Vote Summary:\n";
-    $message .= "Contestant: {$contestant['name']}\n";
-    $message .= "Votes: {$numberOfVotes}\n";
-    $message .= "Total: GHC {$totalCost}\n\n";
-    $message .= "1. Proceed to Payment\n";
-    $message .= "2. Cancel";
-    $continueSession = true;
-}
-elseif ($_SESSION['step'] == 'confirming_payment' && $userData == "1") {
-    $pending = $_SESSION['pending_vote'];
-    $email = $_SESSION['msisdn'] . "@user.ussd.com"; // Generate email from phone number
-    $reference = "VOTE_" . time() . "_" . session_id();
-    $callbackUrl = "https://your-domain.com/ussd_handler.php?paystack_callback=1";
-    
-    $payment = createPaystackPayment($email, $pending['total_cost'], $reference, $callbackUrl);
-    
-    if ($payment['success']) {
-        // For USSD, we need to provide a short URL or payment code
-        // Paystack USSD is limited, so we'll provide payment link
-        $message = "To complete payment of GHC {$pending['total_cost']}:\n";
-        $message .= "Visit: " . shortenUrl($payment['authorization_url']) . "\n";
-        $message .= "Or use Paystack USSD: *402*" . $payment['reference'] . "#\n";
-        $message .= "After payment, dial *123# again to confirm.";
-        $continueSession = false;
-        
-        // Store reference for verification
-        $_SESSION['payment_reference'] = $payment['reference'];
-    } else {
-        $message = "Payment initialization failed. Please try again.";
-        $continueSession = false;
-        unset($_SESSION['pending_vote']);
-        $_SESSION['step'] = 'main_menu';
+    else {
+        $message = "Invalid selection. Please choose 1-" . count($contestants) . ":\n";
+        foreach ($contestants as $index => $contestant) {
+            $num = $index + 1;
+            $message .= "{$num}. {$contestant['name']} ({$contestant['code']})\n";
+        }
+        $message .= "0. Back";
+        $continueSession = true;
     }
-}
-elseif ($_SESSION['step'] == 'confirming_payment' && $userData == "2") {
-    $message = "Vote cancelled.";
-    $continueSession = false;
-    unset($_SESSION['pending_vote']);
-    $_SESSION['step'] = 'main_menu';
-}
-elseif ($userData == "2") {
-    $message = "Current Vote Counts:\n";
-    foreach ($contestants as $contestant) {
-        $message .= "{$contestant['name']} ({$contestant['code']}): {$contestant['votes']} votes\n";
-    }
-    $message .= "\n0. Back to Main Menu";
-    $continueSession = true;
-    $_SESSION['step'] = 'viewing_counts';
-}
-elseif ($_SESSION['step'] == 'viewing_counts' && $userData == "0") {
-    $_SESSION['step'] = 'main_menu';
-    $message = "Welcome to Ghartey Event\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Vote Counts";
-    $continueSession = true;
-}
-else {
-    $message = "Invalid option. Please try again.\n";
-    $message .= "1. Vote\n";
-    $message .= "2. Check Vote Counts\n";
-    $message .= "0. Exit";
-    $continueSession = true;
-    $_SESSION['step'] = 'main_menu';
 }
 
-// Function to shorten URL (for better USSD display)
-function shortenUrl($url) {
-    // You can use a URL shortener API here
-    // For now, return the full URL (USSD supports it)
-    return $url;
+// Handle vote count entry
+elseif ($_SESSION['step'] == 'enter_votes') {
+    if (is_numeric($userData) && $userData >= 1 && $userData <= 1000) {
+        $_SESSION['vote_count'] = intval($userData);
+        $_SESSION['step'] = 'confirm_vote';
+        
+        $contestant = $_SESSION['selected_contestant'];
+        $totalCost = $_SESSION['vote_count'] * $contestant['voteAmount'];
+        
+        $message = "Vote Summary:\n";
+        $message .= "Contestant: {$contestant['name']}\n";
+        $message .= "Nominee Code: {$contestant['code']}\n";
+        $message .= "Number of votes: {$_SESSION['vote_count']}\n";
+        $message .= "Total cost: GHC {$totalCost}\n\n";
+        $message .= "1. Proceed to Payment\n";
+        $message .= "2. Cancel";
+        $continueSession = true;
+    }
+    else {
+        $contestant = $_SESSION['selected_contestant'];
+        $message = "Invalid number. Please enter votes (1-1000):\n";
+        $message .= "Vote for {$contestant['name']} - GHC {$contestant['voteAmount']} per vote";
+        $continueSession = true;
+    }
+}
+
+// Handle vote confirmation and payment
+elseif ($_SESSION['step'] == 'confirm_vote') {
+    if ($userData == "1") {
+        // Process payment
+        $contestant = $_SESSION['selected_contestant'];
+        $voteCount = $_SESSION['vote_count'];
+        $totalCost = $voteCount * $contestant['voteAmount'];
+        $email = $msisdn . "@ussd.voter.com";
+        $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
+        $callbackUrl = "https://your-domain.com/payment_callback.php"; // Update with your actual domain
+        
+        $payment = initiatePaystackPayment($email, $totalCost, $reference, $callbackUrl);
+        
+        if ($payment['success']) {
+            // Store payment info for callback
+            $_SESSION['payment_reference'] = $payment['reference'];
+            $_SESSION['pending_vote'] = [
+                'contestant_id' => $contestant['id'],
+                'contestant_code' => $contestant['code'],
+                'contestant_name' => $contestant['name'],
+                'votes' => $voteCount,
+                'current_votes' => $contestant['votes'],
+                'new_votes' => $contestant['votes'] + $voteCount
+            ];
+            
+            $message = "Payment required: GHC {$totalCost}\n";
+            $message .= "Please visit this link to complete payment:\n";
+            $message .= $payment['authorization_url'] . "\n\n";
+            $message .= "After payment, dial *123# again and your votes will be recorded.\n";
+            $message .= "Reference: {$reference}";
+            $continueSession = false;
+            
+            // Log payment initiation
+            file_put_contents('payments.log', date('Y-m-d H:i:s') . " - Payment initiated: $reference for $msisdn - GHC $totalCost\n", FILE_APPEND);
+        }
+        else {
+            $message = "Payment system error. Please try again later.\n";
+            $message .= "1. Try Again\n";
+            $message .= "2. Main Menu";
+            $continueSession = true;
+            $_SESSION['step'] = 'payment_error';
+        }
+    }
+    elseif ($userData == "2") {
+        // Cancel vote
+        $message = "Vote cancelled.\n";
+        $message .= "1. Vote Again\n";
+        $message .= "2. Main Menu";
+        $continueSession = true;
+        $_SESSION['step'] = 'vote_cancelled';
+        unset($_SESSION['selected_contestant']);
+        unset($_SESSION['vote_count']);
+    }
+    else {
+        $contestant = $_SESSION['selected_contestant'];
+        $totalCost = $_SESSION['vote_count'] * $contestant['voteAmount'];
+        $message = "Vote Summary:\n";
+        $message .= "Contestant: {$contestant['name']}\n";
+        $message .= "Votes: {$_SESSION['vote_count']}\n";
+        $message .= "Total: GHC {$totalCost}\n\n";
+        $message .= "1. Proceed to Payment\n";
+        $message .= "2. Cancel";
+        $continueSession = true;
+    }
+}
+
+// Handle payment error retry
+elseif ($_SESSION['step'] == 'payment_error') {
+    if ($userData == "1") {
+        $_SESSION['step'] = 'confirm_vote';
+        $contestant = $_SESSION['selected_contestant'];
+        $totalCost = $_SESSION['vote_count'] * $contestant['voteAmount'];
+        $message = "Vote Summary:\n";
+        $message .= "Contestant: {$contestant['name']}\n";
+        $message .= "Votes: {$_SESSION['vote_count']}\n";
+        $message .= "Total: GHC {$totalCost}\n\n";
+        $message .= "1. Proceed to Payment\n";
+        $message .= "2. Cancel";
+        $continueSession = true;
+    }
+    elseif ($userData == "2") {
+        $_SESSION['step'] = 'main_menu';
+        $message = "Welcome to Ghartey Event\n";
+        $message .= "1. Vote\n";
+        $message .= "2. Check Vote Counts\n";
+        $message .= "0. Exit";
+        $continueSession = true;
+    }
+}
+
+// Handle vote cancelled
+elseif ($_SESSION['step'] == 'vote_cancelled') {
+    if ($userData == "1") {
+        $_SESSION['step'] = 'select_contestant';
+        $message = "Select Contestant:\n";
+        foreach ($contestants as $index => $contestant) {
+            $num = $index + 1;
+            $message .= "{$num}. {$contestant['name']} ({$contestant['code']}) - GHC {$contestant['voteAmount']}/vote\n";
+        }
+        $message .= "0. Back";
+        $continueSession = true;
+    }
+    elseif ($userData == "2") {
+        $_SESSION['step'] = 'main_menu';
+        $message = "Welcome to Ghartey Event\n";
+        $message .= "1. Vote\n";
+        $message .= "2. Check Vote Counts\n";
+        $message .= "0. Exit";
+        $continueSession = true;
+    }
+    else {
+        $message = "1. Vote Again\n";
+        $message .= "2. Main Menu";
+        $continueSession = true;
+    }
+}
+
+// Handle view votes
+elseif ($_SESSION['step'] == 'view_votes') {
+    if ($userData == "0") {
+        $_SESSION['step'] = 'main_menu';
+        $message = "Welcome to Ghartey Event\n";
+        $message .= "1. Vote\n";
+        $message .= "2. Check Vote Counts\n";
+        $message .= "0. Exit";
+        $continueSession = true;
+    }
+    else {
+        $message = "Current Vote Counts:\n";
+        foreach ($contestants as $contestant) {
+            $message .= "{$contestant['name']} ({$contestant['code']}): {$contestant['votes']} votes\n";
+        }
+        $message .= "\n0. Back to Main Menu";
+        $continueSession = true;
+    }
 }
 
 // Response
