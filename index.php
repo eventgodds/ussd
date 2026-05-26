@@ -23,13 +23,27 @@ if ($newSession == true) {
 
 } elseif ($newSession == false && $userData == "1") {
 
-    $message = "Voting starts soon";
+    $message = "Select Contestant\n";
+    $message .= "1. Nana\n";
+    $message .= "2. Ama";
+
+    $continueSession = true;
+
+} elseif ($newSession == false && $userData == "1*1") {
+
+    $message = "You voted for Nana";
+    $continueSession = false;
+
+} elseif ($newSession == false && $userData == "1*2") {
+
+    $message = "You voted for Ama";
     $continueSession = false;
 
 } else {
 
     $message = "Invalid option";
     $continueSession = false;
+
 }
 
 // Response
