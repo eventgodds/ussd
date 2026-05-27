@@ -1,4 +1,7 @@
 <?php
+// Force Railway to allow outbound connections
+ini_set('default_socket_timeout', 60);
+ini_set('max_execution_time', 120);
 header('Content-Type: application/json');
 
 // Database configurations
@@ -109,25 +112,18 @@ function updateVotesInDB($firestoreUrl, $collection, $documentId, $newVotes) {
 function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $type) {
     global $paystackSecretKey;
     
-    // Clean phone number - MUST be in international format for Paystack
+    // Clean phone number
     $phone = preg_replace('/[^0-9]/', '', $msisdn);
-    if (substr($phone, 0, 1) == '0') {
-        $phone = '233' . substr($phone, 1);
+    if (substr($phone, 0, 3) == '233') {
+        $phone = '0' . substr($phone, 3);
     }
     if (strlen($phone) == 9) {
-        $phone = '233' . $phone;
+        $phone = '0' . $phone;
     }
     
     $email = $phone . "@ussd.voter.com";
     
-    // Determine mobile money provider based on phone prefix
-    $provider = 'mtn'; // default
-    if (substr($phone, 3, 2) == '20' || substr($phone, 3, 2) == '50') {
-        $provider = 'vodafone';
-    } elseif (substr($phone, 3, 2) == '27' || substr($phone, 3, 2) == '57') {
-        $provider = 'airtigo';
-    }
-    
+    // Force IPv4 and longer timeout for Railway
     $url = "https://api.paystack.co/charge";
     
     $data = [
@@ -135,9 +131,10 @@ function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $
         'amount' => $amount * 100,
         'reference' => $reference,
         'currency' => 'GHS',
+        'channels' => ['mobile_money', 'ussd'],
         'mobile_money' => [
             'phone' => $phone,
-            'provider' => $provider
+            'provider' => 'mtn'
         ],
         'metadata' => [
             'nominee_code' => $nomineeCode,
@@ -152,30 +149,39 @@ function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+    curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
+    curl_setopt($ch, CURLOPT_FRESH_CONNECT, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Bearer ' . $paystackSecretKey,
-        'Content-Type: application/json'
+        'Content-Type: application/json',
+        'User-Agent: Railway-USSD-App/1.0'
     ]);
     
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
     curl_close($ch);
     
-    error_log("Paystack Response: " . $response);
+    // Log to Railway console
+    error_log("=== Paystack Charge Response ===");
+    error_log("HTTP Code: " . $httpCode);
+    error_log("Response: " . $response);
+    if ($curlError) {
+        error_log("CURL Error: " . $curlError);
+    }
     
     if ($response === false) {
-        return ['success' => false, 'message' => 'Network error'];
+        return ['success' => false, 'message' => 'Network error: ' . $curlError];
     }
     
     $result = json_decode($response, true);
     
     if ($httpCode == 200 || $httpCode == 201) {
-        if ($result['status']) {
-            // Check if it requires PIN or is pending
-            if (isset($result['data']['status']) && $result['data']['status'] == 'send_pin') {
-                return ['success' => true, 'reference' => $reference, 'message' => 'PIN required'];
-            }
+        if ($result && $result['status']) {
             return ['success' => true, 'reference' => $reference, 'message' => 'Payment initiated'];
         } else {
             $errorMsg = $result['message'] ?? 'Unknown error';
