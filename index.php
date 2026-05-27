@@ -397,7 +397,7 @@ else {
         $message .= "Code: {$nominee['code']}\n";
         $message .= "Current votes: {$nominee['votes']}\n";
         $message .= "Price: GHC {$nominee['voteAmount']} per vote\n\n";
-        $message .= "Enter number of votes (1-1000):\n";
+        $message .= "Enter number of votes:\n";
         $message .= "0. Main Menu";
         $continueSession = true;
     } else {
