@@ -240,7 +240,7 @@ elseif (isset($session['step']) && $session['step'] == 'get_votes') {
         $votes = intval($lastInput);
         $nominee = $session['nominee'];
         
-        if ($votes >= 1 && $votes <= 1000) {
+        if ($votes >= 1 && $votes <= 1000000000000000) {
             $totalAmount = $votes * $nominee['voteAmount'];
             $session['pending_votes'] = $votes;
             $session['total_amount'] = $totalAmount;
@@ -257,11 +257,11 @@ elseif (isset($session['step']) && $session['step'] == 'get_votes') {
             $message .= "0. Main Menu";
             $continueSession = true;
         } else {
-            $message = "Enter number between 1-1000:";
+            $message = "Enter number of votes:";
             $continueSession = true;
         }
     } else {
-        $message = "Enter number of votes (1-1000):";
+        $message = "Enter number of votes:";
         $continueSession = true;
     }
 }
