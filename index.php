@@ -225,7 +225,7 @@ elseif (!isset($_SESSION['step']) || $_SESSION['step'] == 'get_code') {
         $message .= "Code: {$nominee['code']}\n";
         $message .= "Current votes: {$nominee['votes']}\n";
         $message .= "Price: GHC {$nominee['voteAmount']} per vote\n\n";
-        $message .= "Enter number of votes (1-1000):";
+        $message .= "Enter number of votes:";
         $continueSession = true;
     } else {
         $message = "Invalid code '{$nomineeCode}'!\nPlease try again.\nEnter Nominee Code (FS1, PG1, BAP1, etc.):";
@@ -236,7 +236,7 @@ elseif (!isset($_SESSION['step']) || $_SESSION['step'] == 'get_code') {
 elseif ($_SESSION['step'] == 'get_votes' && is_numeric($userData)) {
     $votes = intval($userData);
     
-    if ($votes < 1 || $votes > 1000) {
+    if ($votes < 1 || $votes > 100000000000) {
         $message = "Invalid! Enter number between 1-1000:";
         $continueSession = true;
     } else {
