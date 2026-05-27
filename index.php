@@ -105,52 +105,6 @@ function updateVotesInDB($firestoreUrl, $collection, $documentId, $newVotes) {
     return $httpCode == 200;
 }
 
-function chargeMobileMoneyFallback($amount, $msisdn, $reference, $nomineeCode, $votes, $type) {
-    global $paystackSecretKey;
-    
-    $phone = preg_replace('/[^0-9]/', '', $msisdn);
-    if (substr($phone, 0, 3) == '233') {
-        $phone = '0' . substr($phone, 3);
-    }
-    
-    $email = $phone . "@ussd.voter.com";
-    
-    $data = [
-        'email' => $email,
-        'amount' => $amount * 100,
-        'reference' => $reference,
-        'mobile_money' => ['phone' => $phone, 'provider' => 'mtn'],
-        'metadata' => ['nominee_code' => $nomineeCode, 'votes' => $votes, 'type' => $type]
-    ];
-    
-    $options = [
-        'http' => [
-            'header' => [
-                'Authorization: Bearer ' . $paystackSecretKey,
-                'Content-Type: application/json'
-            ],
-            'method' => 'POST',
-            'content' => json_encode($data),
-            'timeout' => 30
-        ],
-        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
-    ];
-    
-    $context = stream_context_create($options);
-    $response = @file_get_contents('https://api.paystack.co/charge', false, $context);
-    
-    if ($response === false) {
-        return ['success' => false, 'message' => 'Cannot connect to Paystack'];
-    }
-    
-    $result = json_decode($response, true);
-    if ($result && $result['status']) {
-        return ['success' => true, 'reference' => $reference];
-    }
-    
-    return ['success' => false, 'message' => $result['message'] ?? 'Payment failed'];
-}
-
 // ============ KEY FUNCTION: DIRECT MOBILE MONEY PAYMENT ============
 function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $type) {
     global $paystackSecretKey;
@@ -166,24 +120,15 @@ function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $
     
     $email = $phone . "@ussd.voter.com";
     
-    // Detect provider
-    $provider = 'mtn';
-    if (substr($phone, 0, 3) == '020' || substr($phone, 0, 3) == '050') {
-        $provider = 'vodafone';
-    } elseif (substr($phone, 0, 3) == '027' || substr($phone, 0, 3) == '057') {
-        $provider = 'airtigo';
-    }
-    
     $url = "https://api.paystack.co/charge";
     
+    // Use USSD channel - this will send a prompt to the user's phone
     $data = [
         'email' => $email,
         'amount' => $amount * 100,
         'reference' => $reference,
-        'mobile_money' => [
-            'phone' => $phone,
-            'provider' => $provider
-        ],
+        'currency' => 'GHS',
+        'channels' => ['ussd'],
         'metadata' => [
             'nominee_code' => $nomineeCode,
             'votes' => $votes,
@@ -191,10 +136,6 @@ function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $
             'msisdn' => $msisdn
         ]
     ];
-    
-    // DEBUG: Log what we're sending
-    error_log("Paystack Request URL: " . $url);
-    error_log("Paystack Request Data: " . json_encode($data));
     
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
@@ -205,37 +146,25 @@ function chargeMobileMoney($amount, $msisdn, $reference, $nomineeCode, $votes, $
     curl_setopt($ch, CURLOPT_TIMEOUT, 30);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Bearer ' . $paystackSecretKey,
-        'Content-Type: application/json',
-        'User-Agent: USSD-Voting/1.0'
+        'Content-Type: application/json'
     ]);
     
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
     curl_close($ch);
     
-    // DEBUG: Log response
-    error_log("Paystack HTTP Code: " . $httpCode);
-    error_log("Paystack Response: " . $response);
-    if ($curlError) {
-        error_log("CURL Error: " . $curlError);
-    }
-    
-    if ($response === false) {
-        return ['success' => false, 'message' => 'Network error: ' . $curlError];
-    }
+    error_log("Paystack USSD Charge Response: " . $response);
     
     if ($httpCode == 200 || $httpCode == 201) {
         $result = json_decode($response, true);
-        if ($result && $result['status']) {
-            return ['success' => true, 'reference' => $reference, 'message' => 'Payment initiated'];
+        if ($result['status']) {
+            return ['success' => true, 'reference' => $reference, 'message' => 'USSD prompt sent'];
         } else {
-            $errorMsg = $result['message'] ?? 'Unknown error';
-            return ['success' => false, 'message' => $errorMsg];
+            return ['success' => false, 'message' => $result['message'] ?? 'Charge failed'];
         }
     }
     
-    return ['success' => false, 'message' => "HTTP Error: $httpCode"];
+    return ['success' => false, 'message' => 'Could not connect to Paystack'];
 }
 
 function verifyPayment($reference) {
