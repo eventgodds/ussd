@@ -11,3 +11,12 @@
     "healthcheckTimeout": 300
   }
 }
+{
+  "deploy": {
+    "startCommand": "php -S 0.0.0.0:\$PORT -t ."
+  },
+  "network": {
+    "internalPort": 8000,
+    "externalPort": 443
+  }
+}
