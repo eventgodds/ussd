@@ -198,78 +198,83 @@ if (isset($_GET['reference'])) {
 }
 
 // USSD Logic
+// USSD Logic - USING ARKESEL SESSION ID
 $message = "";
 $continueSession = false;
 
+// Use Arkesel's sessionID to track state (NOT PHP sessions)
+$stateFile = "/tmp/ussd_state_" . md5($sessionID) . ".json";
+
+// Load existing state
+$state = [];
+if (file_exists($stateFile)) {
+    $state = json_decode(file_get_contents($stateFile), true);
+}
+
+// Handle "0" to reset
+if ($userData == "0") {
+    @unlink($stateFile);
+    $message = "Welcome to GHartey Voting!\nEnter Nominee Code (FS1, FS2, FS3, FS4, FS5, PG1, etc.):";
+    $continueSession = true;
+    echo json_encode(["sessionID" => $sessionID, "userID" => $userID, "msisdn" => $msisdn, "message" => $message, "continueSession" => $continueSession]);
+    exit;
+}
+
+// NEW SESSION
 if ($newSession == true) {
-    $_SESSION = [];
-    $message = "Welcome to GHartey Voting!\nEnter Nominee Code (FS1, PG1, BAP1, etc.):";
+    @unlink($stateFile);
+    $state = ['step' => 'welcome'];
+    $message = "Welcome to GHartey Voting!\nEnter Nominee Code (FS1, FS2, FS3, FS4, FS5, PG1, etc.):";
     $continueSession = true;
 }
-// Step 1: Get nominee code
-elseif (!isset($_SESSION['step']) || $_SESSION['step'] == 'get_code') {
-    $nomineeCode = strtoupper($userData);
+// STEP: Get votes - Extract the LAST input from Arkesel's format
+elseif (isset($state['step']) && $state['step'] == 'get_votes') {
+    // Arkesel sends "FS1*5" - get the LAST part after *
+    $parts = explode('*', $userData);
+    $lastInput = end($parts);
     
-    // Try both databases
-    $nominee = fetchFromContestantsDB($contestantsFirestoreUrl, $nomineeCode);
-    if (!$nominee) {
-        $nominee = fetchFromAwardsDB($awardsFirestoreUrl, $nomineeCode);
-    }
-    
-    if ($nominee) {
-        $_SESSION['nominee'] = $nominee;
-        $_SESSION['step'] = 'get_votes';
+    if (is_numeric($lastInput) && $lastInput != "0") {
+        $votes = intval($lastInput);
+        $nominee = $state['nominee'];
         
-        $categoryText = isset($nominee['category']) ? "\nCategory: {$nominee['category']}" : "";
-        $message = "Vote for: {$nominee['name']}{$categoryText}\n";
-        $message .= "Code: {$nominee['code']}\n";
-        $message .= "Current votes: {$nominee['votes']}\n";
-        $message .= "Price: GHC {$nominee['voteAmount']} per vote\n\n";
-        $message .= "Enter number of votes:";
-        $continueSession = true;
+        if ($votes >= 1 && $votes <= 1000) {
+            $totalAmount = $votes * $nominee['voteAmount'];
+            $state['pending_votes'] = $votes;
+            $state['total_amount'] = $totalAmount;
+            $state['step'] = 'confirm_payment';
+            
+            $message = "═══════════════════\n";
+            $message .= "VOTE SUMMARY\n";
+            $message .= "═══════════════════\n";
+            $message .= "Nominee: {$nominee['name']}\n";
+            $message .= "Code: {$nominee['code']}\n";
+            $message .= "Votes: {$votes}\n";
+            $message .= "Total: GHC {$totalAmount}\n";
+            $message .= "═══════════════════\n\n";
+            $message .= "1. Proceed to vote GHC {$totalAmount} for {$nominee['name']}\n";
+            $message .= "2. Cancel\n";
+            $message .= "0. Main Menu";
+            $continueSession = true;
+        } else {
+            $message = "Invalid! Enter number between 1-1000:\n(Or enter 0 to go back)";
+            $continueSession = true;
+        }
     } else {
-        $message = "Invalid code '{$nomineeCode}'!\nPlease try again.\nEnter Nominee Code (FS1, PG1, BAP1, etc.):";
+        $message = "Enter number of votes (1-1000):\n(Or enter 0 to go back)";
         $continueSession = true;
     }
 }
-// Step 2: Get number of votes
-elseif ($_SESSION['step'] == 'get_votes' && is_numeric($userData)) {
-    $votes = intval($userData);
+// STEP: Confirm payment
+elseif (isset($state['step']) && $state['step'] == 'confirm_payment') {
+    $parts = explode('*', $userData);
+    $lastInput = end($parts);
     
-    if ($votes < 1 || $votes > 100000000000) {
-        $message = "Invalid! Enter number between 1-1000:";
-        $continueSession = true;
-    } else {
-        $nominee = $_SESSION['nominee'];
-        $totalAmount = $votes * $nominee['voteAmount'];
+    if ($lastInput == "1") {
+        $nominee = $state['nominee'];
+        $votes = $state['pending_votes'];
+        $totalAmount = $state['total_amount'];
         
-        $_SESSION['pending_votes'] = $votes;
-        $_SESSION['step'] = 'confirm_payment';
-        
-        $message = "═══════════════════\n";
-        $message .= "VOTE SUMMARY\n";
-        $message .= "═══════════════════\n";
-        $message .= "Nominee: {$nominee['name']}\n";
-        $message .= "Code: {$nominee['code']}\n";
-        $message .= "Votes: {$votes}\n";
-        $message .= "Total: GHC {$totalAmount}\n";
-        $message .= "═══════════════════\n\n";
-        $message .= "1. Proceed to Pay\n";
-        $message .= "2. Cancel";
-        $continueSession = true;
-    }
-}
-// Step 3: Process payment or cancel
-elseif ($_SESSION['step'] == 'confirm_payment') {
-    if ($userData == "1") {
-        $nominee = $_SESSION['nominee'];
-        $votes = $_SESSION['pending_votes'];
-        $totalAmount = $votes * $nominee['voteAmount'];
-        
-        // Generate unique reference
         $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
-        
-        // Create payment link (update YOUR_DOMAIN_HERE)
         $callbackUrl = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'];
         $customerEmail = $msisdn . "@ussd.voter.com";
         
@@ -285,46 +290,79 @@ elseif ($_SESSION['step'] == 'confirm_payment') {
         
         if ($paymentUrl) {
             $message = "═══════════════════\n";
-            $message .= "PAYMENT REQUIRED\n";
-            $message .= "═══════════════════\n";
-            $message .= "Amount: GHC {$totalAmount}\n\n";
-            $message .= "Click link to pay:\n";
-            $message .= "{$paymentUrl}\n\n";
-            $message .= "After payment, votes will be\n";
-            $message .= "added automatically.\n";
-            $message .= "═══════════════════\n";
+            $message .= "AUTHORIZATION REQUIRED\n";
+            $message .= "═══════════════════\n\n";
+            $message .= "Amount: GHC {$totalAmount}\n";
+            $message .= "Nominee: {$nominee['name']}\n\n";
+            $message .= "An authorization request has\n";
+            $message .= "been sent to your phone.\n\n";
+            $message .= "Please check your phone and\n";
+            $message .= "follow the prompts to\n";
+            $message .= "complete your payment.\n\n";
+            $message .= "After successful authorization,\n";
+            $message .= "your votes will be added\n";
+            $message .= "automatically.\n";
+            $message .= "═══════════════════\n\n";
             $message .= "Thank you for voting!";
             $continueSession = false;
-            
-            // Clear session
-            unset($_SESSION['step']);
-            unset($_SESSION['nominee']);
-            unset($_SESSION['pending_votes']);
+            @unlink($stateFile);
         } else {
             $message = "Payment error. Please try again later.";
             $continueSession = false;
         }
     } 
-    elseif ($userData == "2") {
+    elseif ($lastInput == "2") {
+        @unlink($stateFile);
         $message = "Vote cancelled.\n\nEnter Nominee Code to vote:";
         $continueSession = true;
-        unset($_SESSION['step']);
-        unset($_SESSION['nominee']);
-        unset($_SESSION['pending_votes']);
     }
     else {
-        $message = "Choose option:\n1. Proceed to Pay\n2. Cancel";
+        $message = "Choose:\n1. Proceed to vote GHC {$state['total_amount']} for {$state['nominee']['name']}\n2. Cancel\n0. Main Menu";
         $continueSession = true;
     }
 }
-// Handle any invalid state - restart gracefully
-else {
-    $message = "Session refreshed.\nEnter Nominee Code (FS1, PG1, BAP1, etc.):";
-    $continueSession = true;
-    unset($_SESSION['step']);
-    unset($_SESSION['nominee']);
-    unset($_SESSION['pending_votes']);
+// STEP: Get nominee code
+elseif (isset($state['step']) && $state['step'] == 'welcome') {
+    // For first input, userData is just the code (no asterisks yet)
+    $nomineeCode = strtoupper($userData);
+    
+    // Check if it's a valid code format (FS1-FS5 or any letter+number)
+    if (preg_match('/^[A-Z]{2,3}[0-9]+$/', $nomineeCode) || preg_match('/^FS[1-5]$/', $nomineeCode)) {
+        $nominee = fetchFromContestantsDB($contestantsFirestoreUrl, $nomineeCode);
+        if (!$nominee) {
+            $nominee = fetchFromAwardsDB($awardsFirestoreUrl, $nomineeCode);
+        }
+        
+        if ($nominee) {
+            $state['nominee'] = $nominee;
+            $state['step'] = 'get_votes';
+            
+            $categoryText = isset($nominee['category']) ? " ({$nominee['category']})" : "";
+            $message = "Vote for: {$nominee['name']}{$categoryText}\n";
+            $message .= "Code: {$nominee['code']}\n";
+            $message .= "Current votes: {$nominee['votes']}\n";
+            $message .= "Price: GHC {$nominee['voteAmount']} per vote\n\n";
+            $message .= "Enter number of votes (1-1000):\n";
+            $message .= "(Or enter 0 to go back)";
+            $continueSession = true;
+        } else {
+            $message = "Invalid code '{$nomineeCode}'!\nEnter Nominee Code (FS1, FS2, FS3, FS4, FS5, PG1, etc.):\n(Or enter 0 to exit)";
+            $continueSession = true;
+        }
+    } else {
+        $message = "Invalid format '{$nomineeCode}'!\nUse format like FS1, FS2, PG1, etc.:\n(Or enter 0 to exit)";
+        $continueSession = true;
+    }
 }
+// Fallback
+else {
+    $state = ['step' => 'welcome'];
+    $message = "Enter Nominee Code (FS1, FS2, FS3, FS4, FS5, PG1, etc.):\n(Or enter 0 to exit)";
+    $continueSession = true;
+}
+
+// Save state to file
+file_put_contents($stateFile, json_encode($state));
 
 echo json_encode([
     "sessionID" => $sessionID,
@@ -333,4 +371,3 @@ echo json_encode([
     "message" => $message,
     "continueSession" => $continueSession
 ]);
-?>
