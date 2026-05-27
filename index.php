@@ -10,7 +10,6 @@ $awardsFirestoreUrl = "https://firestore.googleapis.com/v1/projects/{$awardsProj
 
 // Paystack LIVE Keys
 $paystackSecretKey = 'sk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
-$paystackPublicKey = 'pk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
 
 // Read USSD request
 $json = file_get_contents('php://input');
@@ -24,11 +23,11 @@ $userData = trim($data['userData'] ?? '');
 
 session_start();
 
-// ============ FETCH ANY NOMINEE BY CODE FROM EITHER DATABASE ============
+// ============ FETCH NOMINEE BY CODE FROM BOTH DATABASES ============
 function fetchNomineeByCode($awardsUrl, $contestantsUrl, $code) {
-    $code = strtoupper($code);
+    $code = strtoupper(trim($code));
     
-    // FIRST: Check Awards Database (eventgodds)
+    // Check Awards Database (eventgodds)
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $awardsUrl . "/awards_nominees");
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -57,7 +56,7 @@ function fetchNomineeByCode($awardsUrl, $contestantsUrl, $code) {
         }
     }
     
-    // SECOND: Check Contestants Database (eventgodds-41e4f)
+    // Check Contestants Database (eventgodds-41e4f)
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $contestantsUrl . "/contestants");
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -117,22 +116,22 @@ function updateNomineeVotes($dbUrl, $collection, $documentId, $newVotes) {
 }
 
 // ============ CREATE PAYSTACK PAYMENT ============
-function createPaystackPayment($msisdn, $amount, $reference, $nomineeCode, $votes, $callbackUrl) {
+function createPaystackPayment($msisdn, $amount, $reference, $nomineeCode, $votes, $nomineeName) {
     global $paystackSecretKey;
     
-    // Generate email from MSISDN
     $email = $msisdn . "@ussd.voter.com";
     
     $url = "https://api.paystack.co/transaction/initialize";
     
     $data = [
         'email' => $email,
-        'amount' => $amount * 100, // Convert to pesewas
+        'amount' => $amount * 100,
         'reference' => $reference,
-        'callback_url' => $callbackUrl,
+        'callback_url' => "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'],
         'metadata' => [
             'msisdn' => $msisdn,
             'nominee_code' => $nomineeCode,
+            'nominee_name' => $nomineeName,
             'votes' => $votes,
             'amount' => $amount
         ]
@@ -200,90 +199,101 @@ if (isset($_GET['reference'])) {
         $nomineeCode = $metadata['nominee_code'];
         $votes = intval($metadata['votes']);
         
-        // Fetch nominee to update votes
         $nominee = fetchNomineeByCode($awardsFirestoreUrl, $contestantsFirestoreUrl, $nomineeCode);
         
         if ($nominee) {
             $newVotes = $nominee['votes'] + $votes;
             updateNomineeVotes($nominee['dbUrl'], $nominee['collection'], $nominee['id'], $newVotes);
             
-            $logEntry = date('Y-m-d H:i:s') . " | SUCCESS | Ref: {$reference} | Code: {$nomineeCode} | Votes: {$votes} | Total: GHC " . ($votes * $nominee['voteAmount']) . "\n";
+            $logEntry = date('Y-m-d H:i:s') . " | SUCCESS | Ref: {$reference} | Code: {$nomineeCode} | Votes: {$votes}\n";
             file_put_contents('payment_log.txt', $logEntry, FILE_APPEND);
             
-            echo "<h1>Payment Successful!</h1>";
-            echo "<p>{$votes} votes added for {$nominee['name']} ({$nomineeCode})</p>";
+            echo "<h2>✅ Payment Successful!</h2>";
+            echo "<p><strong>{$votes} votes</strong> added for <strong>{$nominee['name']}</strong> ({$nomineeCode})</p>";
             echo "<p>Total cost: GHC " . ($votes * $nominee['voteAmount']) . "</p>";
             echo "<p>Thank you for voting!</p>";
+            echo "<p>You can close this window and continue voting via USSD.</p>";
             exit;
         }
     }
     
-    echo "<h1>Payment Verification Failed</h1>";
-    echo "<p>Please contact support.</p>";
+    echo "<h2>❌ Payment Verification Failed</h2>";
+    echo "<p>Please contact support with your reference number.</p>";
     exit;
 }
 
-// ============ USSD MAIN LOGIC ============
+// ============ USSD MAIN LOGIC WITH PROPER STATE MANAGEMENT ============
 $message = "";
 $continueSession = false;
 
-// INITIAL MENU
+// Initialize session state if new session
 if ($newSession == true) {
     $_SESSION = [];
-    $message = "Welcome to GHartey Voting!\n";
-    $message .= "Enter Nominee Code (e.g., FS1, PG1, AOY1, BGE1):";
+    $_SESSION['state'] = 'awaiting_code';
+    $message = "Welcome to GHartey Voting!\n\nEnter Nominee Code (e.g., FS1, PG1, AOY1):";
     $continueSession = true;
 }
-// STEP 1: User entered nominee code
-elseif (!isset($_SESSION['step']) || $_SESSION['step'] == 'get_code') {
+// STATE: Awaiting nominee code
+elseif ($_SESSION['state'] == 'awaiting_code') {
     $nomineeCode = strtoupper(trim($userData));
     
     $nominee = fetchNomineeByCode($awardsFirestoreUrl, $contestantsFirestoreUrl, $nomineeCode);
     
     if ($nominee) {
         $_SESSION['nominee'] = $nominee;
-        $_SESSION['step'] = 'get_votes';
+        $_SESSION['state'] = 'awaiting_votes';
         
         $categoryText = $nominee['category'] ? " ({$nominee['category']})" : "";
-        $message = "Vote for: {$nominee['name']}{$categoryText}\n";
+        $message = "📌 NOMINEE FOUND\n";
+        $message .= "Name: {$nominee['name']}{$categoryText}\n";
         $message .= "Code: {$nominee['code']}\n";
         $message .= "Current votes: {$nominee['votes']}\n";
-        $message .= "Vote price: GHC {$nominee['voteAmount']}/vote\n\n";
+        $message .= "Price: GHC {$nominee['voteAmount']}/vote\n\n";
         $message .= "Enter number of votes (1-1000):";
         $continueSession = true;
     } else {
-        $message = "Invalid code '{$nomineeCode}'!\n";
-        $message .= "Try: FS1-FS5, PG1-PG3, AOY1-AOY3, BGE1, etc.\n\n";
+        $message = "❌ Invalid code '{$nomineeCode}'\n\n";
+        $message .= "Valid codes: FS1-FS5, PG1-PG3, AOY1-AOY3,\n";
+        $message .= "BGE1, SPO1-SPO4, PL1, MPS1, etc.\n\n";
         $message .= "Enter Nominee Code:";
         $continueSession = true;
     }
 }
-// STEP 2: User entered number of votes
-elseif ($_SESSION['step'] == 'get_votes' && is_numeric($userData)) {
-    $votes = intval($userData);
-    
-    if ($votes < 1 || $votes > 1000) {
-        $message = "Invalid! Enter 1-1000 votes:";
-        $continueSession = true;
+// STATE: Awaiting number of votes
+elseif ($_SESSION['state'] == 'awaiting_votes') {
+    // Check if input is numeric (votes)
+    if (is_numeric($userData) && $userData > 0) {
+        $votes = intval($userData);
+        
+        if ($votes >= 1 && $votes <= 1000) {
+            $nominee = $_SESSION['nominee'];
+            $totalAmount = $votes * $nominee['voteAmount'];
+            
+            $_SESSION['pending_votes'] = $votes;
+            $_SESSION['state'] = 'awaiting_payment_confirmation';
+            
+            $message = "📊 VOTE SUMMARY\n";
+            $message .= "Nominee: {$nominee['name']}\n";
+            $message .= "Code: {$nominee['code']}\n";
+            $message .= "Votes: {$votes}\n";
+            $message .= "Total: GHC {$totalAmount}\n\n";
+            $message .= "1️⃣ Proceed to Pay GHC {$totalAmount}\n";
+            $message .= "2️⃣ Cancel";
+            $continueSession = true;
+        } else {
+            $message = "❌ Invalid! Enter 1-1000 votes:\n";
+            $message .= "Enter number of votes:";
+            $continueSession = true;
+        }
     } else {
-        $nominee = $_SESSION['nominee'];
-        $totalAmount = $votes * $nominee['voteAmount'];
-        
-        $_SESSION['pending_votes'] = $votes;
-        $_SESSION['step'] = 'confirm_payment';
-        
-        $message = "✓ VOTE SUMMARY\n";
-        $message .= "Nominee: {$nominee['name']}\n";
-        $message .= "Code: {$nominee['code']}\n";
-        $message .= "Votes: {$votes}\n";
-        $message .= "Total: GHC {$totalAmount}\n\n";
-        $message .= "1. Proceed to Pay\n";
-        $message .= "2. Cancel";
+        // If not numeric, they might have entered another code by mistake
+        $message = "❌ Please enter NUMBER of votes (1-1000):\n";
+        $message .= "Enter votes:";
         $continueSession = true;
     }
 }
-// STEP 3: User selects payment or cancel
-elseif ($_SESSION['step'] == 'confirm_payment') {
+// STATE: Awaiting payment confirmation (1 or 2)
+elseif ($_SESSION['state'] == 'awaiting_payment_confirmation') {
     if ($userData == "1") {
         $nominee = $_SESSION['nominee'];
         $votes = $_SESSION['pending_votes'];
@@ -291,52 +301,49 @@ elseif ($_SESSION['step'] == 'confirm_payment') {
         $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
         
         // Create Paystack payment link
-        $callbackUrl = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'];
-        $paymentUrl = createPaystackPayment($msisdn, $totalAmount, $reference, $nominee['code'], $votes, $callbackUrl);
+        $paymentUrl = createPaystackPayment($msisdn, $totalAmount, $reference, $nominee['code'], $votes, $nominee['name']);
         
         if ($paymentUrl) {
-            $message = "💰 Payment Required: GHC {$totalAmount}\n\n";
-            $message .= "Click link to pay with Mobile Money or Card:\n";
+            $message = "💰 PAYMENT REQUIRED: GHC {$totalAmount}\n\n";
+            $message .= "Click this link to pay with Mobile Money or Card:\n";
             $message .= $paymentUrl . "\n\n";
-            $message .= "After payment, votes will be added automatically.\n";
-            $message .= "Thank you for voting!";
+            $message .= "✅ After successful payment, votes will be added automatically.\n";
+            $message .= "Thank you for voting for {$nominee['name']}!";
             $continueSession = false;
             
-            // Clear session after payment
-            unset($_SESSION['step']);
+            // Log payment initiation
+            $logEntry = date('Y-m-d H:i:s') . " | INITIATED | MSISDN: {$msisdn} | Code: {$nominee['code']} | Votes: {$votes} | Amount: GHC {$totalAmount} | Ref: {$reference}\n";
+            file_put_contents('payment_log.txt', $logEntry, FILE_APPEND);
+            
+            // Clear session after sending payment link
+            session_destroy();
+        } else {
+            $message = "❌ Payment error. Please try again.\n\nEnter Nominee Code:";
+            $continueSession = true;
+            $_SESSION['state'] = 'awaiting_code';
             unset($_SESSION['nominee']);
             unset($_SESSION['pending_votes']);
-            
-            $logEntry = date('Y-m-d H:i:s') . " | INITIATED | MSISDN: {$msisdn} | Code: {$nominee['code']} | Votes: {$votes} | Amount: GHC {$totalAmount}\n";
-            file_put_contents('payment_log.txt', $logEntry, FILE_APPEND);
-        } else {
-            $message = "Payment error. Please try again later.\n";
-            $message .= "Enter Nominee Code to restart:";
-            $continueSession = true;
-            unset($_SESSION['step']);
         }
     } 
     elseif ($userData == "2") {
-        $message = "Vote cancelled.\n\nEnter Nominee Code to vote:";
+        $message = "❌ Vote cancelled.\n\nEnter Nominee Code to vote:";
         $continueSession = true;
-        unset($_SESSION['step']);
+        $_SESSION['state'] = 'awaiting_code';
         unset($_SESSION['nominee']);
         unset($_SESSION['pending_votes']);
     } 
     else {
-        $message = "Choose 1 to pay or 2 to cancel:\n";
-        $message .= "1. Proceed to Pay\n";
-        $message .= "2. Cancel";
+        $message = "Choose option:\n";
+        $message .= "1️⃣ Proceed to Pay\n";
+        $message .= "2️⃣ Cancel";
         $continueSession = true;
     }
 }
-// Default fallback
+// Fallback - reset session
 else {
-    $message = "Enter Nominee Code (FS1, PG1, AOY1, BGE1, etc.):";
+    $_SESSION['state'] = 'awaiting_code';
+    $message = "Enter Nominee Code (FS1, PG1, AOY1, etc.):";
     $continueSession = true;
-    unset($_SESSION['step']);
-    unset($_SESSION['nominee']);
-    unset($_SESSION['pending_votes']);
 }
 
 // Return USSD response
