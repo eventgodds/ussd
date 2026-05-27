@@ -230,91 +230,110 @@ if ($newSession == true) {
     $message = "Welcome to GHartey Voting!\nEnter Nominee Code (FS1, FS2, FS3, FS4, FS5, PG1, BAP1, etc.):";
     $continueSession = true;
 }
-// STEP: User is entering number of votes (THIS MUST COME FIRST)
-elseif ($_SESSION['step'] == 'get_votes' && is_numeric($userData) && $userData != "0") {
-    $votes = intval($userData);
-    $nominee = $_SESSION['nominee'];
+// STEP: User is entering number of votes - FIXED TO HANDLE ARKESEL FORMAT
+elseif ($_SESSION['step'] == 'get_votes') {
+    // Arkesel sends "FS1*5" - we need to extract the LAST part after asterisk
+    $parts = explode('*', $userData);
+    $lastInput = end($parts);
     
-    if ($votes < 1 || $votes > 1000) {
-        $message = "Invalid! Enter number between 1-1000:\n(Or enter 0 to go back)";
-        $continueSession = true;
-    } else {
-        $totalAmount = $votes * $nominee['voteAmount'];
-        $_SESSION['pending_votes'] = $votes;
-        $_SESSION['total_amount'] = $totalAmount;
-        $_SESSION['step'] = 'confirm_payment';
+    if (is_numeric($lastInput) && $lastInput != "0") {
+        $votes = intval($lastInput);
+        $nominee = $_SESSION['nominee'];
         
-        $message = "═══════════════════\n";
-        $message .= "VOTE SUMMARY\n";
-        $message .= "═══════════════════\n";
-        $message .= "Nominee: {$nominee['name']}\n";
-        $message .= "Code: {$nominee['code']}\n";
-        $message .= "Votes: {$votes}\n";
-        $message .= "Total: GHC {$totalAmount}\n";
-        $message .= "═══════════════════\n\n";
-        $message .= "1. Proceed to vote GHC {$totalAmount} for {$nominee['name']}\n";
-        $message .= "2. Cancel\n";
-        $message .= "0. Main Menu";
+        if ($votes < 1 || $votes > 1000) {
+            $message = "Invalid! Enter number between 1-1000:\n(Or enter 0 to go back)";
+            $continueSession = true;
+        } else {
+            $totalAmount = $votes * $nominee['voteAmount'];
+            $_SESSION['pending_votes'] = $votes;
+            $_SESSION['total_amount'] = $totalAmount;
+            $_SESSION['step'] = 'confirm_payment';
+            
+            $message = "═══════════════════\n";
+            $message .= "VOTE SUMMARY\n";
+            $message .= "═══════════════════\n";
+            $message .= "Nominee: {$nominee['name']}\n";
+            $message .= "Code: {$nominee['code']}\n";
+            $message .= "Votes: {$votes}\n";
+            $message .= "Total: GHC {$totalAmount}\n";
+            $message .= "═══════════════════\n\n";
+            $message .= "1. Proceed to vote GHC {$totalAmount} for {$nominee['name']}\n";
+            $message .= "2. Cancel\n";
+            $message .= "0. Main Menu";
+            $continueSession = true;
+        }
+    } else {
+        $message = "Enter number of votes (1-1000):\n(Or enter 0 to go back)";
         $continueSession = true;
     }
 }
-// STEP: User is confirming payment
-elseif ($_SESSION['step'] == 'confirm_payment' && $userData == "1") {
-    $nominee = $_SESSION['nominee'];
-    $votes = $_SESSION['pending_votes'];
-    $totalAmount = $_SESSION['total_amount'];
+// STEP: User is confirming payment - FIXED TO HANDLE ARKESEL FORMAT
+elseif ($_SESSION['step'] == 'confirm_payment') {
+    // Arkesel sends "FS1*5*1" - we need to extract the LAST part
+    $parts = explode('*', $userData);
+    $lastInput = end($parts);
     
-    // Generate unique reference
-    $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
-    
-    // Create payment link
-    $callbackUrl = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'];
-    $customerEmail = $msisdn . "@ussd.voter.com";
-    
-    $metadata = [
-        'msisdn' => $msisdn,
-        'nominee_code' => $nominee['code'],
-        'votes' => $votes,
-        'type' => $nominee['type'],
-        'amount' => $totalAmount
-    ];
-    
-    $paymentUrl = createPaystackPayment($customerEmail, $totalAmount, $reference, $callbackUrl, $metadata);
-    
-    if ($paymentUrl) {
-        $message = "═══════════════════\n";
-        $message .= "AUTHORIZATION REQUIRED\n";
-        $message .= "═══════════════════\n\n";
-        $message .= "Amount: GHC {$totalAmount}\n";
-        $message .= "Nominee: {$nominee['name']}\n\n";
-        $message .= "An authorization request has\n";
-        $message .= "been sent to your phone.\n\n";
-        $message .= "Please check your phone and\n";
-        $message .= "follow the prompts to\n";
-        $message .= "complete your payment.\n\n";
-        $message .= "After successful authorization,\n";
-        $message .= "your votes will be added\n";
-        $message .= "automatically.\n";
-        $message .= "═══════════════════\n\n";
-        $message .= "Thank you for voting!";
-        $continueSession = false;
+    if ($lastInput == "1") {
+        $nominee = $_SESSION['nominee'];
+        $votes = $_SESSION['pending_votes'];
+        $totalAmount = $_SESSION['total_amount'];
         
-        // Clear session
-        session_destroy();
-    } else {
-        $message = "Payment error. Please try again later.\nEnter 0 to go back:";
-        $continueSession = true;
+        // Generate unique reference
+        $reference = "VOTE_" . time() . "_" . rand(1000, 9999);
+        
+        // Create payment link
+        $callbackUrl = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'];
+        $customerEmail = $msisdn . "@ussd.voter.com";
+        
+        $metadata = [
+            'msisdn' => $msisdn,
+            'nominee_code' => $nominee['code'],
+            'votes' => $votes,
+            'type' => $nominee['type'],
+            'amount' => $totalAmount
+        ];
+        
+        $paymentUrl = createPaystackPayment($customerEmail, $totalAmount, $reference, $callbackUrl, $metadata);
+        
+        if ($paymentUrl) {
+            $message = "═══════════════════\n";
+            $message .= "AUTHORIZATION REQUIRED\n";
+            $message .= "═══════════════════\n\n";
+            $message .= "Amount: GHC {$totalAmount}\n";
+            $message .= "Nominee: {$nominee['name']}\n\n";
+            $message .= "An authorization request has\n";
+            $message .= "been sent to your phone.\n\n";
+            $message .= "Please check your phone and\n";
+            $message .= "follow the prompts to\n";
+            $message .= "complete your payment.\n\n";
+            $message .= "After successful authorization,\n";
+            $message .= "your votes will be added\n";
+            $message .= "automatically.\n";
+            $message .= "═══════════════════\n\n";
+            $message .= "Thank you for voting!";
+            $continueSession = false;
+            
+            // Clear session
+            session_destroy();
+        } else {
+            $message = "Payment error. Please try again later.\nEnter 0 to go back:";
+            $continueSession = true;
+            $_SESSION['step'] = 'welcome';
+        }
+    } 
+    elseif ($lastInput == "2") {
         $_SESSION['step'] = 'welcome';
+        $message = "Vote cancelled.\n\nEnter Nominee Code to vote:";
+        $continueSession = true;
+    }
+    else {
+        $message = "Choose option:\n1. Proceed to vote GHC {$_SESSION['total_amount']} for {$_SESSION['nominee']['name']}\n2. Cancel\n0. Main Menu";
+        $continueSession = true;
     }
 }
-// STEP: User cancels payment
-elseif ($_SESSION['step'] == 'confirm_payment' && $userData == "2") {
-    $_SESSION['step'] = 'welcome';
-    $message = "Vote cancelled.\n\nEnter Nominee Code to vote:";
-    $continueSession = true;
-}
-// STEP: User is entering nominee code (THIS COMES AFTER numeric check)
+// STEP: User is entering nominee code (FIRST INPUT ONLY)
 elseif ($_SESSION['step'] == 'welcome') {
+    // First input is just the code (no asterisks yet)
     $nomineeCode = strtoupper($userData);
     
     // Try both databases
