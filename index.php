@@ -11,7 +11,7 @@ $awardsProjectId = 'eventgodds';
 $awardsFirestoreUrl = "https://firestore.googleapis.com/v1/projects/{$awardsProjectId}/databases/(default)/documents";
 
 // Paystack Configuration
-$paystackSecretKey = 'sk_live_6a5b1dbeb60d226092af20f2b5ff151370c1ee1e';
+$paystackSecretKey = 'sk_test_d35e2ddf51808ccc984132775a0a75b6101e6506';
 
 // Read request from Arkesel
 $json = file_get_contents('php://input');
